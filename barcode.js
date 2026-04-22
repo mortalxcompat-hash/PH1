@@ -1,7 +1,7 @@
 let currentScanner = null;
 let scannerActive = false;
+let stream = null;
 
-// دالة لتحميل Quagga ديناميكياً مع عدة CDNs
 function ensureQuaggaLoaded() {
     return new Promise((resolve, reject) => {
         if (typeof window.Quagga !== 'undefined') {
@@ -16,7 +16,7 @@ function ensureQuaggaLoaded() {
         let current = 0;
         function tryLoad() {
             if (current >= cdnList.length) {
-                reject(new Error('فشل تحميل مكتبة Quagga من جميع المصادر'));
+                reject(new Error('فشل تحميل مكتبة Quagga'));
                 return;
             }
             const script = document.createElement('script');
@@ -41,8 +41,9 @@ function ensureQuaggaLoaded() {
 
 async function requestCameraPermission() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
         stream.getTracks().forEach(track => track.stop());
+        stream = null;
         return true;
     } catch (err) {
         console.error('Camera permission error:', err);
@@ -56,6 +57,10 @@ function stopScannerAndClose() {
         currentScanner = null;
     }
     scannerActive = false;
+    if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+    }
     const modal = document.getElementById('barcodeScannerModal');
     if (modal) modal.style.display = 'none';
     const video = document.getElementById('scannerVideo');
@@ -103,7 +108,17 @@ async function startBarcodeScanner(targetInputId, retryCount = 0) {
         video.srcObject = null;
     }
 
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    try {
+        const videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = videoStream;
+        stream = videoStream;
+        resultDiv.innerHTML = 'الكاميرا جاهزة، انتظر مسح الباركود...';
+    } catch (err) {
+        console.error('Error accessing camera for preview:', err);
+        resultDiv.innerHTML = '⚠️ تعذر عرض معاينة الكاميرا، لكن المسح يعمل في الخلفية.';
+    }
 
     QuaggaLib.init({
         inputStream: {
@@ -135,7 +150,6 @@ async function startBarcodeScanner(targetInputId, retryCount = 0) {
         QuaggaLib.start();
         currentScanner = QuaggaLib;
         scannerActive = true;
-        resultDiv.innerHTML = 'انتظر مسح الباركود...';
         const manualBtn = document.getElementById('manualBarcodeBtn');
         if (manualBtn) manualBtn.style.display = 'inline-block';
     });
@@ -191,7 +205,17 @@ async function startScannerForSearch() {
         video.srcObject = null;
     }
 
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    try {
+        const videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = videoStream;
+        stream = videoStream;
+        resultDiv.innerHTML = 'الكاميرا جاهزة، انتظر مسح الباركود...';
+    } catch (err) {
+        console.error('Error accessing camera for preview:', err);
+        resultDiv.innerHTML = '⚠️ تعذر عرض معاينة الكاميرا، لكن المسح يعمل في الخلفية.';
+    }
 
     QuaggaLib.init({
         inputStream: {
@@ -220,7 +244,6 @@ async function startScannerForSearch() {
         QuaggaLib.start();
         currentScanner = QuaggaLib;
         scannerActive = true;
-        resultDiv.innerHTML = 'انتظر مسح الباركود...';
         const manualBtn = document.getElementById('manualBarcodeBtn');
         if (manualBtn) manualBtn.style.display = 'inline-block';
     });
