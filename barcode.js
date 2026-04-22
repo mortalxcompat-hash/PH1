@@ -1,6 +1,7 @@
 let currentScanner = null;
 let scannerActive = false;
 
+// دالة لتحميل Quagga ديناميكياً مع عدة CDNs
 function ensureQuaggaLoaded() {
     return new Promise((resolve, reject) => {
         if (typeof window.Quagga !== 'undefined') {
