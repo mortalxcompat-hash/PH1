@@ -1,6 +1,43 @@
 let currentScanner = null;
 let scannerActive = false;
 
+function ensureQuaggaLoaded() {
+    return new Promise((resolve, reject) => {
+        if (typeof window.Quagga !== 'undefined') {
+            resolve(window.Quagga);
+            return;
+        }
+        const cdnList = [
+            'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js',
+            'https://unpkg.com/quagga@0.12.1/dist/quagga.min.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js'
+        ];
+        let current = 0;
+        function tryLoad() {
+            if (current >= cdnList.length) {
+                reject(new Error('فشل تحميل مكتبة Quagga من جميع المصادر'));
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = cdnList[current];
+            script.onload = () => {
+                if (typeof window.Quagga !== 'undefined') {
+                    resolve(window.Quagga);
+                } else {
+                    current++;
+                    tryLoad();
+                }
+            };
+            script.onerror = () => {
+                current++;
+                tryLoad();
+            };
+            document.head.appendChild(script);
+        }
+        tryLoad();
+    });
+}
+
 async function requestCameraPermission() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -32,7 +69,17 @@ async function startBarcodeScanner(targetInputId, retryCount = 0) {
     const video = document.getElementById('scannerVideo');
     const resultDiv = document.getElementById('scannerResult');
     if (!modal || !video) return;
-    
+
+    let QuaggaLib;
+    try {
+        QuaggaLib = await ensureQuaggaLoaded();
+    } catch (err) {
+        resultDiv.innerHTML = '❌ تعذر تحميل مكتبة الباركود. تأكد من اتصال الإنترنت.';
+        modal.style.display = 'flex';
+        alert('تعذر تحميل مكتبة الباركود. يرجى التحقق من اتصال الإنترنت وإعادة المحاولة.');
+        return;
+    }
+
     const hasPermission = await requestCameraPermission();
     if (!hasPermission) {
         resultDiv.innerHTML = '❌ لا يمكن الوصول إلى الكاميرا. يرجى السماح بالوصول.';
@@ -44,26 +91,19 @@ async function startBarcodeScanner(targetInputId, retryCount = 0) {
         }
         return;
     }
-    
+
     stopScannerAndClose();
     modal.setAttribute('data-target', targetInputId);
     modal.style.display = 'flex';
     resultDiv.innerHTML = 'جاري تشغيل الكاميرا...';
-    
+
     if (video.srcObject) {
         video.srcObject.getTracks().forEach(track => track.stop());
         video.srcObject = null;
     }
-    
+
     await new Promise(resolve => setTimeout(resolve, 300));
-    
-    const QuaggaLib = window.Quagga;
-    if (!QuaggaLib) {
-        resultDiv.innerHTML = '❌ مكتبة الباركود غير متوفرة.';
-        alert('مكتبة الباركود غير متوفرة. تأكد من تحميل Quagga.');
-        return;
-    }
-    
+
     QuaggaLib.init({
         inputStream: {
             name: "Live",
@@ -98,7 +138,7 @@ async function startBarcodeScanner(targetInputId, retryCount = 0) {
         const manualBtn = document.getElementById('manualBarcodeBtn');
         if (manualBtn) manualBtn.style.display = 'inline-block';
     });
-    
+
     QuaggaLib.offDetected();
     QuaggaLib.onDetected((data) => {
         if (!scannerActive) return;
@@ -122,7 +162,17 @@ async function startScannerForSearch() {
     const video = document.getElementById('scannerVideo');
     const resultDiv = document.getElementById('scannerResult');
     if (!modal || !video) return;
-    
+
+    let QuaggaLib;
+    try {
+        QuaggaLib = await ensureQuaggaLoaded();
+    } catch (err) {
+        resultDiv.innerHTML = '❌ تعذر تحميل مكتبة الباركود.';
+        modal.style.display = 'flex';
+        alert('تعذر تحميل مكتبة الباركود. يرجى التحقق من اتصال الإنترنت.');
+        return;
+    }
+
     const hasPermission = await requestCameraPermission();
     if (!hasPermission) {
         resultDiv.innerHTML = '❌ لا يمكن الوصول إلى الكاميرا.';
@@ -130,25 +180,18 @@ async function startScannerForSearch() {
         alert('لا يمكن الوصول إلى الكاميرا.');
         return;
     }
-    
+
     stopScannerAndClose();
     modal.style.display = 'flex';
     resultDiv.innerHTML = 'جاري تشغيل الكاميرا...';
-    
+
     if (video.srcObject) {
         video.srcObject.getTracks().forEach(track => track.stop());
         video.srcObject = null;
     }
-    
+
     await new Promise(resolve => setTimeout(resolve, 300));
-    
-    const QuaggaLib = window.Quagga;
-    if (!QuaggaLib) {
-        resultDiv.innerHTML = '❌ مكتبة الباركود غير متوفرة.';
-        alert('مكتبة الباركود غير متوفرة.');
-        return;
-    }
-    
+
     QuaggaLib.init({
         inputStream: {
             name: "Live",
@@ -180,7 +223,7 @@ async function startScannerForSearch() {
         const manualBtn = document.getElementById('manualBarcodeBtn');
         if (manualBtn) manualBtn.style.display = 'inline-block';
     });
-    
+
     QuaggaLib.offDetected();
     QuaggaLib.onDetected(async (data) => {
         if (!scannerActive) return;
