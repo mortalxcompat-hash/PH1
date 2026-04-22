@@ -872,6 +872,33 @@ body.dark .medicine-count {
     margin-top: 12px;
     font-size: 14px;
 }
+.edit-btn {
+    background: var(--warning);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 30px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.edit-btn:hover {
+    background: #e08e3a;
+}
+.delete-btn {
+    background: var(--danger);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 30px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.delete-btn:hover {
+    background: #d45a3a;
+}
+.edit-btn::before, .delete-btn::before {
+    content: none;
+}
 @media (max-width: 600px) {
     .content-list {
         grid-template-columns: 1fr;
