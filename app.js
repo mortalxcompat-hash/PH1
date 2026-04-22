@@ -1895,8 +1895,38 @@ async function showMedDetails(med) {
     `;
     const addBtn = document.getElementById('addToPharmacyBtn');
     if (addBtn) addBtn.style.display = (currentPage === 'pharmacy' || currentPage === 'companies') ? 'none' : 'inline-flex';
-    document.getElementById('editMedBtn').onclick = () => { closeModal('medModal'); showEditFormModal(med); };
-    document.getElementById('addToPharmacyBtn').onclick = async () => { await addToPharmacy(med); closeModal('medModal'); };
+    
+    const editBtn = document.getElementById('editMedBtn');
+    const deleteBtn = document.getElementById('deleteMedBtn');
+    const addPharmacyBtn = document.getElementById('addToPharmacyBtn');
+    const cancelBtn = document.getElementById('cancelMedBtn');
+    
+    if (editBtn) {
+        const newEditBtn = editBtn.cloneNode(true);
+        editBtn.parentNode.replaceChild(newEditBtn, editBtn);
+        newEditBtn.onclick = () => { closeModal('medModal'); showEditFormModal(med); };
+    }
+    if (deleteBtn) {
+        const newDeleteBtn = deleteBtn.cloneNode(true);
+        deleteBtn.parentNode.replaceChild(newDeleteBtn, deleteBtn);
+        newDeleteBtn.onclick = () => {
+            if (confirm(t('delete_confirm'))) {
+                moveToDeleted(med.id);
+                closeModal('medModal');
+            }
+        };
+    }
+    if (addPharmacyBtn) {
+        const newAddBtn = addPharmacyBtn.cloneNode(true);
+        addPharmacyBtn.parentNode.replaceChild(newAddBtn, addPharmacyBtn);
+        newAddBtn.onclick = async () => { await addToPharmacy(med); closeModal('medModal'); };
+    }
+    if (cancelBtn) {
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        newCancelBtn.onclick = () => closeModal('medModal');
+    }
+    
     openModal('medModal');
 }
 
