@@ -20,13 +20,12 @@ db.version(1).stores({
 
 const MED_TYPES = { GENERAL: 'general', PHARMACY: 'pharmacy' };
 
-// ألوان طبية مريحة
 const availableColors = [
-    { name: 'أزرق طبي', nameEn: 'Medical Blue', primary: '#2c7da0', primaryDark: '#1f5068', primaryLight: '#4a9ec4' },
-    { name: 'أخضر مريح', nameEn: 'Calm Green', primary: '#2a9d8f', primaryDark: '#1f6e63', primaryLight: '#4cb8aa' },
+    { name: 'أخضر طبي', nameEn: 'Medical Green', primary: '#2a9d8f', primaryDark: '#1f6e63', primaryLight: '#4cb8aa' },
+    { name: 'أزرق سماوي', nameEn: 'Sky Blue', primary: '#00b4d8', primaryDark: '#0096c7', primaryLight: '#48cae4' },
     { name: 'فيروزي', nameEn: 'Teal', primary: '#008080', primaryDark: '#006666', primaryLight: '#20b2aa' },
     { name: 'بنفسجي هادئ', nameEn: 'Soft Purple', primary: '#6c5ce7', primaryDark: '#4a3bb5', primaryLight: '#8a7ced' },
-    { name: 'أزرق سماوي', nameEn: 'Sky Blue', primary: '#00b4d8', primaryDark: '#0096c7', primaryLight: '#48cae4' },
+    { name: 'أزرق طبي', nameEn: 'Medical Blue', primary: '#2c7da0', primaryDark: '#1f5068', primaryLight: '#4a9ec4' },
     { name: 'أخضر زيتوني', nameEn: 'Olive', primary: '#6b8e23', primaryDark: '#556b2f', primaryLight: '#9acd32' }
 ];
 
@@ -191,6 +190,10 @@ function applyAppColor(color) {
     root.style.setProperty('--primary', color.primary);
     root.style.setProperty('--primary-dark', color.primaryDark);
     root.style.setProperty('--primary-light', color.primaryLight);
+    if (document.body.classList.contains('dark')) {
+        root.style.setProperty('--primary', color.primaryDark);
+        root.style.setProperty('--primary-dark', color.primary);
+    }
     const metaTheme = document.getElementById('themeColorMeta');
     if (metaTheme) metaTheme.setAttribute('content', color.primary);
     localStorage.setItem('appColor', JSON.stringify(color));
@@ -628,6 +631,7 @@ async function showStats() {
     const pharmacyCount = meds.filter(m=>m.type===MED_TYPES.PHARMACY).length;
     document.getElementById('stats').innerHTML = `<div class="stats-box"><div>${t('total')}: <strong>${total}</strong></div><div>${t('pharmacy_count')}: <strong>${pharmacyCount}</strong></div><div>${t('expired')}: <strong style="color:var(--danger)">${expired}</strong></div><div>${t('expiring_30')}: <strong style="color:var(--warning)">${expiring30}</strong></div></div>`;
 }
+
 async function renderAllMedicines() {
     typeFilter = MED_TYPES.GENERAL;
     const container = document.getElementById('pageContent');
@@ -1380,6 +1384,7 @@ function renderMedicationsInExplore(list, parentDiv) {
         container.appendChild(card);
     });
 }
+
 function showAddFormModal() {
     isEditing = false;
     isInEditMode = true;
@@ -2135,4 +2140,3 @@ document.addEventListener('DOMContentLoaded', async () => {
     switchPage('home');
     checkAndSendExpiryNotifications();
 });
-
