@@ -20,9 +20,14 @@
 </head>
 <body>
     <div class="app-header">
-        <button id="settingsHeaderBtn" class="header-btn settings-btn">⚙️</button>
+        <div class="header-left">
+            <button id="backBtn" class="header-btn back-header-btn" style="display: none;">←</button>
+            <button id="settingsHeaderBtn" class="header-btn settings-btn">⚙️</button>
+        </div>
         <div id="appTitle" class="app-title">Pharmacy Manager</div>
-        <button id="notifBtn" class="header-btn notif-btn">🔔<span id="notifBadge" class="badge"></span></button>
+        <div class="header-right">
+            <button id="notifBtn" class="header-btn notif-btn">🔔<span id="notifBadge" class="badge"></span></button>
+        </div>
     </div>
     <div id="pageContent" class="page-content"></div>
 
@@ -56,10 +61,19 @@
                     <button type="button" class="small-btn" id="addCategoryBtn">➕ تصنيف جديد</button>
                 </div>
                 <div class="form-row"><input type="text" id="dosageForm" placeholder="الشكل الدوائي" class="form-input"><input type="text" id="dosage" placeholder="الجرعة" class="form-input"></div>
-                <div class="form-row">
-                    <input type="date" id="medExpiry1" class="form-input"><label>تاريخ الانتهاء 1 *</label>
-                    <input type="date" id="medExpiry2" class="form-input"><label>تاريخ الانتهاء 2</label>
-                    <input type="date" id="medExpiry3" class="form-input"><label>تاريخ الانتهاء 3</label>
+                <div class="form-row expiry-row">
+                    <div class="expiry-input-group">
+                        <input type="date" id="medExpiry1" class="form-input expiry-date">
+                        <label class="expiry-label">تاريخ الانتهاء 1 *</label>
+                    </div>
+                    <div class="expiry-input-group">
+                        <input type="date" id="medExpiry2" class="form-input expiry-date">
+                        <label class="expiry-label">تاريخ الانتهاء 2</label>
+                    </div>
+                    <div class="expiry-input-group">
+                        <input type="date" id="medExpiry3" class="form-input expiry-date">
+                        <label class="expiry-label">تاريخ الانتهاء 3</label>
+                    </div>
                 </div>
                 <div class="form-row"><input type="text" id="medBarcode" placeholder="الباركود" class="form-input"><button type="button" class="small-btn" id="scanBarcodeBtn">📷 مسح باركود</button></div>
                 <div class="form-row image-upload"><label class="image-upload-label">📷 اختر صورة<input type="file" id="medImage" accept="image/*" style="display: none;"></label><div id="imagePreview" class="image-preview"></div></div>
@@ -152,17 +166,14 @@
         </div>
     </div>
 
-    <!-- نافذة اختيار لون التطبيق -->
+    <!-- نافذة اختيار لون التطبيق (بدون إيموجي) -->
     <div id="colorModal" class="modal small-modal">
         <div class="modal-content">
             <span class="close-modal" id="closeColorModal">✖</span>
-            <h3>🎨 اختر لون التطبيق</h3>
+            <h3>اختر لون التطبيق</h3>
             <div class="color-options" id="colorOptions"></div>
         </div>
     </div>
-
-    <!-- زر العودة -->
-    <button id="backBtn" class="back-btn" style="display: none;">← العودة</button>
 
     <!-- نافذة التحميل -->
     <div id="loadingOverlay" class="loading-overlay">
