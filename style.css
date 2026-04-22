@@ -1,7 +1,7 @@
 :root {
-    --primary: #2c7da0;
-    --primary-dark: #1f5068;
-    --primary-light: #4a9ec4;
+    --primary: #2a9d8f;
+    --primary-dark: #1f6e63;
+    --primary-light: #4cb8aa;
     --danger: #e76f51;
     --warning: #f4a261;
     --success: #2a9d8f;
@@ -104,10 +104,6 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-}
-/* إزالة زر العودة العائم القديم */
-.back-btn {
-    display: none !important;
 }
 #pageContent {
     flex: 1;
@@ -929,6 +925,14 @@ body.dark .medicine-count {
 }
 .edit-btn::before, .delete-btn::before {
     content: none;
+}
+#scannerVideo {
+    width: 100%;
+    height: auto;
+    max-height: 400px;
+    object-fit: cover;
+    background: #000;
+    border-radius: 16px;
 }
 @media (max-width: 600px) {
     .content-list {
