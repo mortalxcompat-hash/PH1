@@ -1,109 +1,43 @@
-let currentScanner = null;
-let scannerActive = false;
+/* =========================================================
+   PRODUCTION GRADE BARCODE SCANNER ENGINE
+   Native API → ZXing → Quagga fallback
+   + Frame throttling
+   + Decode locking
+   + Smart fallback
+   + Visibility pause control
+   + CLEAN UI MODE (NO ENGINE TEXT)
+========================================================= */
+
+let currentEngine = null;
 let stream = null;
+
+let scanning = false;
+let decodeLock = false;
 
 let lastCode = null;
 let lastTime = 0;
 
-let engine = "zxing";
-let zxingTimer = null;
-let fallbackActive = false;
+let fallbackTimer = null;
+let visibilityPaused = false;
 
 /* =========================
-   DUPLICATE FILTER (HARD MODE)
+   DUPLICATE FILTER (FAST)
 ========================= */
-function isValidScan(code) {
+function isDuplicate(code) {
     const now = Date.now();
 
-    if (!code) return false;
-
-    if (lastCode === code && (now - lastTime) < 2500) return false;
+    if (lastCode === code && (now - lastTime) < 2000) return true;
 
     lastCode = code;
     lastTime = now;
 
-    return true;
+    return false;
 }
 
 /* =========================
-   LOADERS
+   CAMERA INIT
 ========================= */
-function loadZXing() {
-    return new Promise((resolve, reject) => {
-        if (window.ZXing) return resolve(window.ZXing);
-
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@latest";
-        s.onload = () => resolve(window.ZXing);
-        s.onerror = reject;
-        document.head.appendChild(s);
-    });
-}
-
-function loadQuagga() {
-    return new Promise((resolve, reject) => {
-        if (window.Quagga) return resolve(window.Quagga);
-
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js";
-        s.onload = () => resolve(window.Quagga);
-        s.onerror = reject;
-        document.head.appendChild(s);
-    });
-}
-
-/* =========================
-   CAMERA CONTROL
-========================= */
-async function requestCamera() {
-    try {
-        const temp = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment" }
-        });
-
-        temp.getTracks().forEach(t => t.stop());
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-/* =========================
-   CLEAN RESET (IMPORTANT)
-========================= */
-function stopScannerAndClose() {
-    try {
-        if (currentScanner?.stop) currentScanner.stop();
-        if (currentScanner?.reset) currentScanner.reset();
-    } catch {}
-
-    currentScanner = null;
-    scannerActive = false;
-    fallbackActive = false;
-
-    clearTimeout(zxingTimer);
-
-    if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-        stream = null;
-    }
-
-    const modal = document.getElementById("barcodeScannerModal");
-    if (modal) modal.style.display = "none";
-
-    const video = document.getElementById("scannerVideo");
-    if (video?.srcObject) {
-        video.srcObject.getTracks().forEach(t => t.stop());
-        video.srcObject = null;
-    }
-
-    lastCode = null;
-}
-
-/* =========================
-   CAMERA STREAM
-========================= */
-async function startCamera(video, resultDiv) {
+async function startCamera(video) {
     const s = await navigator.mediaDevices.getUserMedia({
         video: {
             facingMode: "environment",
@@ -115,64 +49,171 @@ async function startCamera(video, resultDiv) {
     video.srcObject = s;
     stream = s;
 
-    resultDiv.innerHTML = "GOD MODE scanning...";
+    await video.play();
+
+    /* ensure video is ready */
+    await new Promise(resolve => {
+        if (video.readyState >= 2) return resolve();
+        video.onloadedmetadata = () => resolve();
+    });
 }
 
 /* =========================
-   ZXING ENGINE (INTELLIGENT)
+   CLEAN STOP
 ========================= */
-async function startZXing(video, resultDiv, onResult) {
-    const ZXingLib = await loadZXing();
-    const reader = new ZXingLib.BrowserMultiFormatReader();
+function stopScanner() {
+    scanning = false;
+    decodeLock = false;
 
-    currentScanner = reader;
-    scannerActive = true;
+    clearTimeout(fallbackTimer);
 
-    resultDiv.innerHTML = "ZXing active (GOD MODE)";
+    if (currentEngine?.reset) currentEngine.reset();
+    if (currentEngine?.stop) currentEngine.stop();
 
-    // ⛔ intelligent fallback trigger
-    zxingTimer = setTimeout(() => {
-        if (!fallbackActive) {
-            fallbackActive = true;
-            switchToQuagga(video, resultDiv, onResult);
-        }
-    }, 4500);
+    currentEngine = null;
 
-    try {
-        const devices = await ZXingLib.BrowserMultiFormatReader.listVideoInputDevices();
-        const deviceId = devices?.[0]?.deviceId;
-
-        reader.decodeFromVideoDevice(deviceId, video, (result) => {
-            if (!result) return;
-
-            const code = result.getText();
-
-            if (!isValidScan(code)) return;
-
-            clearTimeout(zxingTimer);
-
-            resultDiv.innerHTML = "ZXing: " + code;
-
-            reader.reset();
-            scannerActive = false;
-
-            onResult(code);
-        });
-
-    } catch {
-        switchToQuagga(video, resultDiv, onResult);
+    if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
     }
 }
 
 /* =========================
-   QUAGGA FALLBACK (ROi + STABILITY)
+   VISIBILITY CONTROL
 ========================= */
-async function switchToQuagga(video, resultDiv, onResult) {
-    engine = "quagga";
+document.addEventListener("visibilitychange", () => {
+    visibilityPaused = document.hidden;
 
+    if (visibilityPaused) {
+        if (stream) stream.getTracks().forEach(t => t.enabled = false);
+    } else {
+        if (stream) stream.getTracks().forEach(t => t.enabled = true);
+    }
+});
+
+/* =========================================================
+   1. NATIVE BARCODE DETECTOR
+========================================================= */
+async function tryNativeBarcode(video, onResult) {
+    if (!("BarcodeDetector" in window)) return false;
+
+    const detector = new BarcodeDetector({
+        formats: [
+            "ean_13",
+            "ean_8",
+            "code_128",
+            "code_39",
+            "upc_a",
+            "upc_e"
+        ]
+    });
+
+    currentEngine = detector;
+    scanning = true;
+
+    const loop = async () => {
+        if (!scanning) return;
+
+        if (decodeLock) decodeLock = false;
+        if (visibilityPaused) return requestAnimationFrame(loop);
+
+        try {
+            decodeLock = true;
+
+            const barcodes = await detector.detect(video);
+
+            if (barcodes.length > 0) {
+                const code = barcodes[0].rawValue;
+
+                if (!isDuplicate(code)) {
+                    stopScanner();
+                    onResult(code);
+                    return;
+                }
+            }
+
+        } catch {}
+
+        requestAnimationFrame(loop);
+    };
+
+    loop();
+    return true;
+}
+
+/* =========================================================
+   2. ZXING ENGINE
+========================================================= */
+async function loadZXing() {
+    if (window.ZXing) return window.ZXing;
+
+    return new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@latest";
+        s.onload = () => resolve(window.ZXing);
+        s.onerror = reject;
+        document.head.appendChild(s);
+    });
+}
+
+async function startZXing(video, onResult, resultDiv) {
+    const ZXingLib = await loadZXing();
+    const reader = new ZXingLib.BrowserMultiFormatReader();
+
+    currentEngine = reader;
+    scanning = true;
+
+    /* CLEAN UI ONLY */
+    if (resultDiv) resultDiv.innerHTML = "يتم مسح الباركود";
+
+    fallbackTimer = setTimeout(() => {
+        if (!scanning) return;
+        switchToQuagga(video, onResult, resultDiv);
+    }, 3000);
+
+    const devices = await ZXingLib.BrowserMultiFormatReader.listVideoInputDevices();
+
+    const backCamera =
+        devices?.find(d => d.label?.toLowerCase().includes("back")) ||
+        devices?.find(d => d.label?.toLowerCase().includes("environment"));
+
+    const deviceId = backCamera?.deviceId || devices?.[0]?.deviceId;
+
+    reader.decodeFromVideoDevice(deviceId, video, (result) => {
+        if (!result || !scanning) return;
+
+        const code = result.getText();
+
+        if (isDuplicate(code)) return;
+
+        clearTimeout(fallbackTimer);
+        stopScanner();
+
+        onResult(code);
+    });
+}
+
+/* =========================================================
+   3. QUAGGA FALLBACK
+========================================================= */
+async function loadQuagga() {
+    if (window.Quagga) return window.Quagga;
+
+    return new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js";
+        s.onload = () => resolve(window.Quagga);
+        s.onerror = reject;
+        document.head.appendChild(s);
+    });
+}
+
+async function switchToQuagga(video, onResult, resultDiv) {
     const Quagga = await loadQuagga();
 
-    resultDiv.innerHTML = "Fallback engine activated";
+    currentEngine = Quagga;
+
+    if (resultDiv) resultDiv.innerHTML = "يتم مسح الباركود";
 
     Quagga.init({
         inputStream: {
@@ -180,17 +221,7 @@ async function switchToQuagga(video, resultDiv, onResult) {
             target: video,
             constraints: {
                 facingMode: "environment"
-            },
-            area: {
-                top: "15%",
-                bottom: "15%",
-                left: "10%",
-                right: "10%"
             }
-        },
-        locator: {
-            patchSize: "medium",
-            halfSample: true
         },
         decoder: {
             readers: [
@@ -201,104 +232,57 @@ async function switchToQuagga(video, resultDiv, onResult) {
                 "ean_8_reader"
             ]
         },
-        locate: true,
-        frequency: 8
+        locate: true
     }, (err) => {
-        if (err) {
-            resultDiv.innerHTML = "Scanner error";
-            return;
-        }
+        if (err) return;
 
         Quagga.start();
-        currentScanner = Quagga;
-        scannerActive = true;
+        scanning = true;
     });
 
     Quagga.offDetected();
 
     Quagga.onDetected((data) => {
+        if (!scanning) return;
+
         const code = data?.codeResult?.code;
 
-        if (!isValidScan(code)) return;
+        if (isDuplicate(code)) return;
 
-        resultDiv.innerHTML = "Quagga: " + code;
-
-        Quagga.stop();
-        scannerActive = false;
-
+        stopScanner();
         onResult(code);
     });
 }
 
-/* =========================
-   MAIN GOD MODE START
-========================= */
-async function startBarcodeScanner(targetInputId) {
+/* =========================================================
+   MAIN START FUNCTION (CLEAN UI)
+========================================================= */
+async function startBarcodeScanner(videoId, onResult) {
+    const video = document.getElementById(videoId);
     const modal = document.getElementById("barcodeScannerModal");
-    const video = document.getElementById("scannerVideo");
     const resultDiv = document.getElementById("scannerResult");
 
-    if (!modal || !video) return;
+    if (!video) return;
 
-    const ok = await requestCamera();
-    if (!ok) {
-        resultDiv.innerHTML = "No camera permission";
-        modal.style.display = "flex";
-        return;
-    }
-
-    stopScannerAndClose();
-
-    modal.setAttribute("data-target", targetInputId);
-    modal.style.display = "flex";
-
-    await startCamera(video, resultDiv);
-
-    // 🔥 ALWAYS START WITH ZXING
-    startZXing(video, resultDiv, (code) => {
-        const input = document.getElementById(targetInputId);
-        if (input) input.value = code;
-    });
-}
-
-/* =========================
-   SEARCH MODE GOD
-========================= */
-async function startScannerForSearch() {
-    const modal = document.getElementById("barcodeScannerModal");
-    const video = document.getElementById("scannerVideo");
-    const resultDiv = document.getElementById("scannerResult");
-
-    if (!modal || !video) return;
-
-    const ok = await requestCamera();
-    if (!ok) {
-        resultDiv.innerHTML = "No camera permission";
-        modal.style.display = "flex";
-        return;
-    }
-
-    stopScannerAndClose();
+    stopScanner();
 
     modal.style.display = "flex";
 
-    await startCamera(video, resultDiv);
+    await startCamera(video);
 
-    startZXing(video, resultDiv, async (code) => {
+    await new Promise(r => setTimeout(r, 800));
 
-        if (typeof window.findMedicineByBarcode === "function") {
-            window.findMedicineByBarcode(code);
-        } else {
-            const med = await db?.meds?.where("barcode").equals(code).first();
-            if (med) window.showMedDetails(med);
-            else alert("Not found");
-        }
-    });
+    /* CLEAN UI TEXT ONLY */
+    if (resultDiv) resultDiv.innerHTML = "يتم مسح الباركود";
+
+    const native = await tryNativeBarcode(video, onResult);
+    if (native) return;
+
+    await startZXing(video, onResult, resultDiv);
 }
 
-/* =========================
+/* =========================================================
    EXPORTS
-========================= */
+========================================================= */
 window.startBarcodeScanner = startBarcodeScanner;
-window.startScannerForSearch = startScannerForSearch;
-window.stopScannerAndClose = stopScannerAndClose;
+window.stopScanner = stopScanner;
