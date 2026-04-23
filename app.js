@@ -21,12 +21,12 @@ db.version(1).stores({
 const MED_TYPES = { GENERAL: 'general', PHARMACY: 'pharmacy' };
 
 const availableColors = [
-    { name: 'أخضر طبي', nameEn: 'Medical Green', primary: '#2a9d8f', primaryDark: '#1f6e63', primaryLight: '#4cb8aa' },
+    { name: 'أخضر', nameEn: 'Green', primary: '#2a9d8f', primaryDark: '#1f6e63', primaryLight: '#4cb8aa' },
     { name: 'أزرق سماوي', nameEn: 'Sky Blue', primary: '#00b4d8', primaryDark: '#0096c7', primaryLight: '#48cae4' },
     { name: 'فيروزي', nameEn: 'Teal', primary: '#008080', primaryDark: '#006666', primaryLight: '#20b2aa' },
-    { name: 'بنفسجي هادئ', nameEn: 'Soft Purple', primary: '#6c5ce7', primaryDark: '#4a3bb5', primaryLight: '#8a7ced' },
-    { name: 'أزرق طبي', nameEn: 'Medical Blue', primary: '#2c7da0', primaryDark: '#1f5068', primaryLight: '#4a9ec4' },
-    { name: 'أخضر زيتوني', nameEn: 'Olive', primary: '#6b8e23', primaryDark: '#556b2f', primaryLight: '#9acd32' }
+    { name: 'بنفسجي', nameEn: 'Purple', primary: '#6c5ce7', primaryDark: '#4a3bb5', primaryLight: '#8a7ced' },
+    { name: 'أزرق', nameEn: 'Blue', primary: '#2c7da0', primaryDark: '#1f5068', primaryLight: '#4a9ec4' },
+    { name: 'زيتوني', nameEn: 'Olive', primary: '#6b8e23', primaryDark: '#556b2f', primaryLight: '#9acd32' }
 ];
 
 const translations = {
@@ -268,17 +268,71 @@ async function initDemoData() {
     } catch (err) { console.error(err); } finally { hideLoading(); }
 }
 
+async function isDuplicateMedicine(medData, excludeId = null) {
+    try {
+        let query = db.meds.where('name').equals(medData.name);
+        const existingMeds = await query.toArray();
+        
+        for (let existing of existingMeds) {
+            if (excludeId && existing.id === excludeId) continue;
+            
+            const isDuplicate = (
+                existing.name === medData.name &&
+                (existing.scientificName || '') === (medData.scientificName || '') &&
+                (existing.company || '') === (medData.company || '') &&
+                (existing.origin || '') === (medData.origin || '') &&
+                (existing.type || '') === (medData.type || '') &&
+                (existing.category || '') === (medData.category || '') &&
+                (existing.dosageForm || '') === (medData.dosageForm || '') &&
+                (existing.dosage || '') === (medData.dosage || '') &&
+                (existing.barcode || '') === (medData.barcode || '') &&
+                (existing.expiry || '') === (medData.expiry || '')
+            );
+            
+            if (isDuplicate) {
+                return existing;
+            }
+        }
+        return null;
+    } catch (err) {
+        console.error('Error checking duplicate:', err);
+        return null;
+    }
+}
+
 async function addMedicineToGeneralIfNotExists(medData) {
-    const existing = await db.meds.where('type').equals(MED_TYPES.GENERAL)
-        .and(m => m.name === medData.name && m.company === medData.company &&
-                  m.dosageForm === medData.dosageForm && m.dosage === medData.dosage).first();
-    if (!existing) {
-        await db.meds.add({
-            name: medData.name, scientificName: medData.scientificName, company: medData.company,
-            origin: medData.origin, type: MED_TYPES.GENERAL, category: medData.category,
-            expiry: '9999-12-31', barcode: medData.barcode, image: medData.image,
-            dosageForm: medData.dosageForm, dosage: medData.dosage, createdAt: new Date().toISOString()
-        });
+    try {
+        const existingGeneral = await db.meds.where('type').equals(MED_TYPES.GENERAL)
+            .and(m => m.name === medData.name && 
+                      (m.scientificName || '') === (medData.scientificName || '') &&
+                      (m.company || '') === (medData.company || '') &&
+                      (m.dosageForm || '') === (medData.dosageForm || '') &&
+                      (m.dosage || '') === (medData.dosage || ''))
+            .first();
+            
+        if (!existingGeneral) {
+            const generalMed = {
+                name: medData.name,
+                scientificName: medData.scientificName || '',
+                company: medData.company || '',
+                origin: medData.origin || '',
+                type: MED_TYPES.GENERAL,
+                category: medData.category || '',
+                dosageForm: medData.dosageForm || '',
+                dosage: medData.dosage || '',
+                barcode: medData.barcode || '',
+                image: medData.image || null,
+                expiry: '9999-12-31',
+                createdAt: new Date().toISOString()
+            };
+            
+            const duplicateGeneral = await isDuplicateMedicine(generalMed);
+            if (!duplicateGeneral) {
+                await db.meds.add(generalMed);
+            }
+        }
+    } catch (err) {
+        console.error('Error adding to general medicines:', err);
     }
 }
 
@@ -568,7 +622,55 @@ function updateSelectionButtons() {
 function selectAllMeds() { document.querySelectorAll('.med-card').forEach(card => { const id = parseInt(card.getAttribute('data-id')); if (!selectedMeds.has(id)) toggleSelectMed(id); }); }
 function deselectAllMeds() { document.querySelectorAll('.med-card').forEach(card => { const id = parseInt(card.getAttribute('data-id')); if (selectedMeds.has(id)) toggleSelectMed(id); }); }
 async function batchDelete() { if(selectedMeds.size===0) return alert(t('batch_delete_confirm',0)); if(confirm(t('batch_delete_confirm',selectedMeds.size))){ showLoading('جاري حذف الأدوية...'); try{ for(let id of selectedMeds){ const med = await db.meds.get(id); if(med) await db.deletedMeds.add(med); await db.meds.delete(id); } selectedMeds.clear(); selectionMode=false; document.querySelectorAll('.med-card .checkbox').forEach(cb=>cb.style.display='none'); if(currentPage==='all') renderAllMedicines(); else if(currentPage==='pharmacy') renderPharmacyMedicines(); updateBarChart(); }finally{ hideLoading(); } } }
-async function batchAddToPharmacy() { if(selectedMeds.size===0) return; const medicines = []; for(let id of selectedMeds){ const med = await db.meds.get(id); if(med) medicines.push(med); } if(!medicines.length) return; showLoading('جاري إضافة الأدوية إلى الصيدلية...'); let added=0; for(let med of medicines){ const newExpiry = prompt(t('please_enter_expiry')+med.name, new Date(Date.now()+30*86400000).toISOString().split('T')[0]); if(!newExpiry) continue; const newMed = { name:med.name, expiry:newExpiry, scientificName:med.scientificName||'', company:med.company||'', origin:med.origin||'', type:MED_TYPES.PHARMACY, category:med.category||'', barcode:med.barcode||'', image:med.image||null, dosageForm:med.dosageForm||'', dosage:med.dosage||'', createdAt:new Date().toISOString() }; await db.meds.add(newMed); added++; await addMedicineToGeneralIfNotExists(newMed); } hideLoading(); if(added>0){ const toast = document.createElement('div'); toast.className='offline-toast'; toast.innerText = t('batch_add_success')+` (${added})`; document.body.appendChild(toast); setTimeout(()=>toast.remove(),2000); if(currentPage==='all') renderAllMedicines(); else if(currentPage==='pharmacy') renderPharmacyMedicines(); } else alert('لم يتم إضافة أي دواء'); }
+async function batchAddToPharmacy() { 
+    if(selectedMeds.size===0) return; 
+    const medicines = []; 
+    for(let id of selectedMeds){ 
+        const med = await db.meds.get(id); 
+        if(med) medicines.push(med); 
+    } 
+    if(!medicines.length) return; 
+    showLoading('جاري إضافة الأدوية إلى الصيدلية...'); 
+    let added=0; 
+    let duplicates=0;
+    for(let med of medicines){ 
+        const newExpiry = prompt(t('please_enter_expiry')+med.name, new Date(Date.now()+30*86400000).toISOString().split('T')[0]); 
+        if(!newExpiry) continue; 
+        
+        const newMed = { 
+            name:med.name, expiry:newExpiry, scientificName:med.scientificName||'', company:med.company||'', 
+            origin:med.origin||'', type:MED_TYPES.PHARMACY, category:med.category||'', 
+            barcode:med.barcode||'', image:med.image||null, dosageForm:med.dosageForm||'', 
+            dosage:med.dosage||'', createdAt:new Date().toISOString() 
+        };
+        
+        const duplicate = await isDuplicateMedicine(newMed);
+        if (duplicate) {
+            duplicates++;
+            continue;
+        }
+        
+        await db.meds.add(newMed); 
+        added++; 
+        await addMedicineToGeneralIfNotExists(newMed); 
+    } 
+    hideLoading(); 
+    if(added>0){ 
+        const toast = document.createElement('div'); 
+        toast.className='offline-toast'; 
+        let msg = t('batch_add_success')+` (${added})`;
+        if(duplicates>0) msg += `، تم تخطي ${duplicates} دواء مكرر`;
+        toast.innerText = msg; 
+        document.body.appendChild(toast); 
+        setTimeout(()=>toast.remove(),3000); 
+        if(currentPage==='all') renderAllMedicines(); 
+        else if(currentPage==='pharmacy') renderPharmacyMedicines(); 
+    } else if(duplicates>0) {
+        alert(`لم يتم إضافة أي دواء. جميع الأدوية (${duplicates}) مكررة بالفعل في الصيدلية.`);
+    } else {
+        alert('لم يتم إضافة أي دواء');
+    }
+}
 
 function renderHome() {
     const container = document.getElementById('pageContent');
@@ -1492,6 +1594,16 @@ async function saveMedFromForm() {
             if (isEditing) {
                 delete data.createdAt;
                 data.id = currentMed.id;
+                
+                const duplicate = await isDuplicateMedicine(data, currentMed.id);
+                if (duplicate) {
+                    hideLoading();
+                    alert(currentLang === 'ar' 
+                        ? `لا يمكن التعديل. يوجد دواء مطابق بالفعل: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})`
+                        : `Cannot edit. Duplicate medicine exists: ${duplicate.name} (Expiry: ${duplicate.expiry})`);
+                    return;
+                }
+                
                 await db.meds.update(currentMed.id, data);
                 closeMedFormModal();
                 if (currentPage === 'all') renderAllMedicines();
@@ -1502,6 +1614,16 @@ async function saveMedFromForm() {
             } else {
                 for (let expiry of expiries) {
                     const newMed = { ...data, expiry };
+                    
+                    const duplicate = await isDuplicateMedicine(newMed);
+                    if (duplicate) {
+                        hideLoading();
+                        alert(currentLang === 'ar' 
+                            ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})`
+                            : `Cannot add. Duplicate medicine exists: ${duplicate.name} (Expiry: ${duplicate.expiry})`);
+                        return;
+                    }
+                    
                     await db.meds.add(newMed);
                     await addMedicineToGeneralIfNotExists(newMed);
                 }
@@ -1568,6 +1690,16 @@ async function saveGeneralMedFromForm() {
             image: null,
             createdAt: new Date().toISOString()
         };
+        
+        const duplicate = await isDuplicateMedicine(medData);
+        if (duplicate) {
+            hideLoading();
+            alert(currentLang === 'ar' 
+                ? `لا يمكن الإضافة. يوجد دواء عام مطابق بالفعل: ${duplicate.name}`
+                : `Cannot add. Duplicate general medicine exists: ${duplicate.name}`);
+            return;
+        }
+        
         const imgFile = document.getElementById('genImage')?.files[0];
         const save = async (data) => {
             await db.meds.add(data);
@@ -1887,9 +2019,22 @@ async function importGeneral(file) {
                 meds.push({ name: trade, scientificName: (item.scientific_name || '').trim(), company: (item.manufacturer_name || '').trim(), origin: (item.manufacturer_nationality || '').trim(), dosageForm: (item['Dosage form'] || '').trim(), dosage: (item.Dose || '').trim(), category: (item.category || '').trim(), type: MED_TYPES.GENERAL, expiry: '9999-12-31', createdAt: new Date().toISOString(), barcode: '', image: null });
             }
         } else throw new Error('تنسيق غير صحيح');
+        
         meds = meds.filter(m => !m.type || m.type === MED_TYPES.GENERAL).map(m => ({ ...m, type: MED_TYPES.GENERAL }));
-        await db.meds.bulkPut(meds);
-        alert('تم الاستيراد بنجاح');
+        
+        let added = 0;
+        let duplicates = 0;
+        for (const med of meds) {
+            const duplicate = await isDuplicateMedicine(med);
+            if (duplicate) {
+                duplicates++;
+                continue;
+            }
+            await db.meds.add(med);
+            added++;
+        }
+        
+        alert(`تم الاستيراد بنجاح\nتمت إضافة: ${added} دواء\nتم تخطي المكرر: ${duplicates} دواء`);
         if (currentPage === 'all') renderAllMedicines();
         else if (currentPage === 'pharmacy') renderPharmacyMedicines();
         else if (currentPage === 'home') renderHome();
@@ -1908,9 +2053,22 @@ async function importPharmacy(file) {
         if (data.meds && Array.isArray(data.meds)) meds = data.meds;
         else if (Array.isArray(data)) meds = data;
         else throw new Error('تنسيق غير صحيح');
+        
         meds = meds.filter(m => !m.type || m.type === MED_TYPES.PHARMACY).map(m => ({ ...m, type: MED_TYPES.PHARMACY }));
-        await db.meds.bulkPut(meds);
-        alert('تم الاستيراد بنجاح');
+        
+        let added = 0;
+        let duplicates = 0;
+        for (const med of meds) {
+            const duplicate = await isDuplicateMedicine(med);
+            if (duplicate) {
+                duplicates++;
+                continue;
+            }
+            await db.meds.add(med);
+            added++;
+        }
+        
+        alert(`تم الاستيراد بنجاح\nتمت إضافة: ${added} دواء\nتم تخطي المكرر: ${duplicates} دواء`);
         if (currentPage === 'all') renderAllMedicines();
         else if (currentPage === 'pharmacy') renderPharmacyMedicines();
         else if (currentPage === 'home') renderHome();
@@ -2052,16 +2210,24 @@ async function showMedDetails(med) {
 }
 
 async function addToPharmacy(originalMed) {
-    const existingCount = await db.meds.where('type').equals(MED_TYPES.PHARMACY).and(m => m.name === originalMed.name && m.company === originalMed.company && m.dosageForm === originalMed.dosageForm && m.dosage === originalMed.dosage).count();
-    if (existingCount > 0 && !confirm(t('medicine_exists_in_pharmacy'))) return;
     const newExpiry = prompt(t('add_expiry'), new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0]);
     if (!newExpiry) return;
+    
     const newMed = {
         name: originalMed.name, expiry: newExpiry, scientificName: originalMed.scientificName || '', company: originalMed.company || '',
         origin: originalMed.origin || '', type: MED_TYPES.PHARMACY, category: originalMed.category || '',
         barcode: originalMed.barcode || '', image: originalMed.image || null, dosageForm: originalMed.dosageForm || '',
         dosage: originalMed.dosage || '', createdAt: new Date().toISOString()
     };
+    
+    const duplicate = await isDuplicateMedicine(newMed);
+    if (duplicate) {
+        alert(currentLang === 'ar' 
+            ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل في الصيدلية: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})`
+            : `Cannot add. Duplicate medicine exists in pharmacy: ${duplicate.name} (Expiry: ${duplicate.expiry})`);
+        return;
+    }
+    
     await db.meds.add(newMed);
     await addMedicineToGeneralIfNotExists(newMed);
     const toast = document.createElement('div'); toast.className = 'offline-toast'; toast.innerText = t('added_to_pharmacy'); document.body.appendChild(toast); setTimeout(() => toast.remove(), 2000);
@@ -2261,3 +2427,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     switchPage('home');
     checkAndSendExpiryNotifications();
 });
+
