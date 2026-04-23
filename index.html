@@ -20,9 +20,9 @@
 </head>
 <body>
     <div class="app-header">
-        <button id="settingsHeaderBtn" class="header-btn settings-btn">⚙️</button>
-        <div id="appTitle" class="app-title">Pharmacy Manager</div>
         <button id="notifBtn" class="header-btn notif-btn">🔔<span id="notifBadge" class="badge"></span></button>
+        <div id="appTitle" class="app-title">Pharmacy Manager</div>
+        <button id="settingsHeaderBtn" class="header-btn settings-btn">⚙️</button>
     </div>
     <div id="pageContent" class="page-content"></div>
 
@@ -170,14 +170,14 @@
         </div>
     </div>
 
-    <!-- زر العودة -->
-    <button id="backBtn" class="back-floating-btn" style="display: none;">←</button>
-
     <!-- نافذة التحميل -->
     <div id="loadingOverlay" class="loading-overlay">
         <div class="loading-spinner"></div>
         <div id="loadingText" class="loading-text">جاري التحميل...</div>
     </div>
+
+    <!-- زر الرجوع الذكي -->
+    <button id="smartBackBtn" class="back-floating-btn" style="display: none;">← رجوع</button>
 
     <script src="app.js"></script>
     <script>
