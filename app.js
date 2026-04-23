@@ -150,6 +150,7 @@ let selectedCategories = new Set();
 let batchMode = false;
 let currentCompaniesSearchTerm = '';
 let currentCompaniesSortType = 'alpha';
+let previousSearchQuery = '';
 
 function t(key, ...args) {
     let text = translations[currentLang][key] || key;
@@ -283,7 +284,12 @@ async function addMedicineToGeneralIfNotExists(medData) {
 
 function goHome() {
     if (currentPage === 'home') showExitConfirmation();
-    else switchPage('home');
+    else {
+        if (searchQuery !== '') {
+            searchQuery = '';
+        }
+        switchPage('home');
+    }
 }
 
 function showExitConfirmation() { openModal('exitConfirmModal'); }
@@ -343,17 +349,17 @@ function updateAllText() {
     const titleDiv = document.getElementById('appTitle');
     if (titleDiv) titleDiv.innerHTML = t(titleKey);
     
-    const backBtn = document.getElementById('backBtn');
+    const smartBackBtn = document.getElementById('smartBackBtn');
     const settingsBtn = document.getElementById('settingsHeaderBtn');
     const notifBtn = document.getElementById('notifBtn');
     
     if (currentPage === 'home') {
-        if (backBtn) backBtn.style.display = 'none';
+        if (smartBackBtn) smartBackBtn.style.display = 'none';
         if (settingsBtn) settingsBtn.style.display = 'flex';
         if (notifBtn) notifBtn.style.display = 'flex';
     } else {
-        if (backBtn) backBtn.style.display = 'flex';
-        if (settingsBtn) settingsBtn.style.display = 'flex';
+        if (smartBackBtn) smartBackBtn.style.display = 'flex';
+        if (settingsBtn) settingsBtn.style.display = 'none';
         if (notifBtn) notifBtn.style.display = 'none';
     }
     
@@ -377,6 +383,7 @@ function saveSearchQuery(pageKey, query) {
 }
 
 function performSearch(query, pageKey) {
+    previousSearchQuery = searchQuery;
     searchQuery = query;
     saveSearchQuery(pageKey, query);
     currentPageNumber = 1;
@@ -384,6 +391,19 @@ function performSearch(query, pageKey) {
     else if (pageKey === 'pharmacy') renderPharmacyMedicines();
     else if (pageKey === 'companies') renderCompaniesPage();
     else if (pageKey === 'expiring') renderExpiringSoonPage();
+}
+
+function clearSearch() {
+    if (searchQuery && searchQuery.trim() !== '') {
+        searchQuery = '';
+        currentPageNumber = 1;
+        if (currentPage === 'all') renderAllMedicines();
+        else if (currentPage === 'pharmacy') renderPharmacyMedicines();
+        else if (currentPage === 'companies') renderCompaniesPage();
+        else if (currentPage === 'expiring') renderExpiringSoonPage();
+        return true;
+    }
+    return false;
 }
 
 async function updateSearchSuggestions(input, suggestionsBox, type = 'medicines') {
@@ -1597,39 +1617,39 @@ function openSettingsModal() {
     }
     container.innerHTML = `
         <div class="settings-card" data-page="language">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('language')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">🌐</span><span class="settings-card-title">${t('language')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="darkmode">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('dark_mode')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">🌙</span><span class="settings-card-title">${t('dark_mode')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="color">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('change_color')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">🎨</span><span class="settings-card-title">${t('change_color')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="notify">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('notification_days')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">⏰</span><span class="settings-card-title">${t('notification_days')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="defaultExpiry">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('default_expiry')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">📅</span><span class="settings-card-title">${t('default_expiry')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="searchHistory">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('search_history')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">🔍</span><span class="settings-card-title">${t('search_history')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="backupRestore">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('backup_restore')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">💾</span><span class="settings-card-title">${t('backup_restore')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="exportCSVPDF">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('export_csv')} / PDF</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">📄</span><span class="settings-card-title">${t('export_csv')} / PDF</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="about">
-            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('about_app')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon">ℹ️</span><span class="settings-card-title">${t('about_app')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
     `;
@@ -2098,6 +2118,7 @@ window.handleBackButton = function () {
         showExitConfirmation();
         return;
     }
+    
     if (isInEditMode && currentMed) {
         showSaveChangesModal(
             async () => { await saveMedFromForm(); isInEditMode = false; currentMed = null; switchPage('home'); },
@@ -2105,19 +2126,19 @@ window.handleBackButton = function () {
         );
         return;
     }
+    
     if (currentCompany !== null) {
         currentCompany = null;
         renderCompaniesPage();
         return;
     }
-    if (searchQuery !== '') {
-        searchQuery = '';
-        if (currentPage === 'all') renderAllMedicines();
-        else if (currentPage === 'pharmacy') renderPharmacyMedicines();
-        else if (currentPage === 'companies') renderCompaniesPage();
-        else if (currentPage === 'expiring') renderExpiringSoonPage();
-        return;
+    
+    if (searchQuery !== '' && searchQuery.trim() !== '') {
+        if (clearSearch()) {
+            return;
+        }
     }
+    
     if (pageHistoryStack.length > 0) {
         const prev = pageHistoryStack.pop();
         switchPage(prev);
@@ -2187,11 +2208,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const notifBtn = document.getElementById('notifBtn');
     const settingsBtn = document.getElementById('settingsHeaderBtn');
-    const backButton = document.getElementById('backBtn');
+    const smartBackBtn = document.getElementById('smartBackBtn');
     const appTitle = document.getElementById('appTitle');
     if (notifBtn) notifBtn.onclick = () => switchPage('inbox');
     if (settingsBtn) settingsBtn.onclick = () => openSettingsModal();
-    if (backButton) backButton.onclick = () => window.handleBackButton();
+    if (smartBackBtn) smartBackBtn.onclick = () => window.handleBackButton();
     if (appTitle) appTitle.onclick = () => window.goHome();
 
     const submitMed = document.getElementById('submitMedBtn');
@@ -2240,4 +2261,3 @@ document.addEventListener('DOMContentLoaded', async () => {
     switchPage('home');
     checkAndSendExpiryNotifications();
 });
-
