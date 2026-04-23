@@ -1,134 +1,191 @@
 let currentScanner = null;
 let scannerActive = false;
 let stream = null;
-let lastScannedCode = null;
-let lastScanTime = 0;
-let detectionLock = false; // منع التكرار السريع
 
-function ensureQuaggaLoaded() {
+let lastCode = null;
+let lastTime = 0;
+
+let engine = "zxing";
+let zxingTimer = null;
+let fallbackActive = false;
+
+/* =========================
+   DUPLICATE FILTER (HARD MODE)
+========================= */
+function isValidScan(code) {
+    const now = Date.now();
+
+    if (!code) return false;
+
+    if (lastCode === code && (now - lastTime) < 2500) return false;
+
+    lastCode = code;
+    lastTime = now;
+
+    return true;
+}
+
+/* =========================
+   LOADERS
+========================= */
+function loadZXing() {
     return new Promise((resolve, reject) => {
-        if (typeof window.Quagga !== 'undefined') {
-            resolve(window.Quagga);
-            return;
-        }
+        if (window.ZXing) return resolve(window.ZXing);
 
-        const cdnList = [
-            'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js',
-            'https://unpkg.com/quagga@0.12.1/dist/quagga.min.js',
-            'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js'
-        ];
-
-        let current = 0;
-
-        function tryLoad() {
-            if (current >= cdnList.length) {
-                reject(new Error('فشل تحميل مكتبة Quagga'));
-                return;
-            }
-
-            const script = document.createElement('script');
-            script.src = cdnList[current];
-            script.async = true;
-
-            script.onload = () => {
-                if (window.Quagga) resolve(window.Quagga);
-                else {
-                    current++;
-                    tryLoad();
-                }
-            };
-
-            script.onerror = () => {
-                current++;
-                tryLoad();
-            };
-
-            document.head.appendChild(script);
-        }
-
-        tryLoad();
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@latest";
+        s.onload = () => resolve(window.ZXing);
+        s.onerror = reject;
+        document.head.appendChild(s);
     });
 }
 
-async function requestCameraPermission() {
+function loadQuagga() {
+    return new Promise((resolve, reject) => {
+        if (window.Quagga) return resolve(window.Quagga);
+
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js";
+        s.onload = () => resolve(window.Quagga);
+        s.onerror = reject;
+        document.head.appendChild(s);
+    });
+}
+
+/* =========================
+   CAMERA CONTROL
+========================= */
+async function requestCamera() {
     try {
-        stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: "environment"
-            }
+        const temp = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment" }
         });
 
-        stream.getTracks().forEach(track => track.stop());
-        stream = null;
-
+        temp.getTracks().forEach(t => t.stop());
         return true;
-    } catch (err) {
-        console.error('Camera permission error:', err);
+    } catch {
         return false;
     }
 }
 
+/* =========================
+   CLEAN RESET (IMPORTANT)
+========================= */
 function stopScannerAndClose() {
     try {
-        if (currentScanner) {
-            currentScanner.offDetected();
-            currentScanner.stop();
-        }
-    } catch (e) {}
+        if (currentScanner?.stop) currentScanner.stop();
+        if (currentScanner?.reset) currentScanner.reset();
+    } catch {}
 
     currentScanner = null;
     scannerActive = false;
-    detectionLock = false;
+    fallbackActive = false;
+
+    clearTimeout(zxingTimer);
 
     if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(t => t.stop());
         stream = null;
     }
 
-    const modal = document.getElementById('barcodeScannerModal');
-    if (modal) modal.style.display = 'none';
+    const modal = document.getElementById("barcodeScannerModal");
+    if (modal) modal.style.display = "none";
 
-    const video = document.getElementById('scannerVideo');
-    if (video && video.srcObject) {
-        video.srcObject.getTracks().forEach(track => track.stop());
+    const video = document.getElementById("scannerVideo");
+    if (video?.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
         video.srcObject = null;
     }
 
-    lastScannedCode = null;
+    lastCode = null;
 }
 
-async function initCameraPreview(video, resultDiv) {
+/* =========================
+   CAMERA STREAM
+========================= */
+async function startCamera(video, resultDiv) {
+    const s = await navigator.mediaDevices.getUserMedia({
+        video: {
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        }
+    });
+
+    video.srcObject = s;
+    stream = s;
+
+    resultDiv.innerHTML = "GOD MODE scanning...";
+}
+
+/* =========================
+   ZXING ENGINE (INTELLIGENT)
+========================= */
+async function startZXing(video, resultDiv, onResult) {
+    const ZXingLib = await loadZXing();
+    const reader = new ZXingLib.BrowserMultiFormatReader();
+
+    currentScanner = reader;
+    scannerActive = true;
+
+    resultDiv.innerHTML = "ZXing active (GOD MODE)";
+
+    // ⛔ intelligent fallback trigger
+    zxingTimer = setTimeout(() => {
+        if (!fallbackActive) {
+            fallbackActive = true;
+            switchToQuagga(video, resultDiv, onResult);
+        }
+    }, 4500);
+
     try {
-        const videoStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: { ideal: "environment" },
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-                focusMode: "continuous"
-            }
+        const devices = await ZXingLib.BrowserMultiFormatReader.listVideoInputDevices();
+        const deviceId = devices?.[0]?.deviceId;
+
+        reader.decodeFromVideoDevice(deviceId, video, (result) => {
+            if (!result) return;
+
+            const code = result.getText();
+
+            if (!isValidScan(code)) return;
+
+            clearTimeout(zxingTimer);
+
+            resultDiv.innerHTML = "ZXing: " + code;
+
+            reader.reset();
+            scannerActive = false;
+
+            onResult(code);
         });
 
-        video.srcObject = videoStream;
-        stream = videoStream;
-
-        resultDiv.innerHTML = 'الكاميرا جاهزة، انتظر مسح الباركود...';
-
-    } catch (err) {
-        console.error('Preview error:', err);
-        resultDiv.innerHTML = '⚠️ تعذر عرض الكاميرا، لكن المسح يعمل.';
+    } catch {
+        switchToQuagga(video, resultDiv, onResult);
     }
 }
 
-function createQuaggaConfig(video) {
-    return {
+/* =========================
+   QUAGGA FALLBACK (ROi + STABILITY)
+========================= */
+async function switchToQuagga(video, resultDiv, onResult) {
+    engine = "quagga";
+
+    const Quagga = await loadQuagga();
+
+    resultDiv.innerHTML = "Fallback engine activated";
+
+    Quagga.init({
         inputStream: {
-            name: "Live",
             type: "LiveStream",
             target: video,
             constraints: {
-                facingMode: "environment",
-                width: { min: 640, ideal: 1280 },
-                height: { min: 480, ideal: 720 }
+                facingMode: "environment"
+            },
+            area: {
+                top: "15%",
+                bottom: "15%",
+                left: "10%",
+                right: "10%"
             }
         },
         locator: {
@@ -138,212 +195,110 @@ function createQuaggaConfig(video) {
         decoder: {
             readers: [
                 "ean_reader",
-                "ean_8_reader",
                 "upc_reader",
-                "upc_e_reader",
                 "code_128_reader",
                 "code_39_reader",
-                "codabar_reader"
-            ],
-            multiple: false
+                "ean_8_reader"
+            ]
         },
         locate: true,
-        frequency: 10,
-        numOfWorkers: navigator.hardwareConcurrency || 2
-    };
+        frequency: 8
+    }, (err) => {
+        if (err) {
+            resultDiv.innerHTML = "Scanner error";
+            return;
+        }
+
+        Quagga.start();
+        currentScanner = Quagga;
+        scannerActive = true;
+    });
+
+    Quagga.offDetected();
+
+    Quagga.onDetected((data) => {
+        const code = data?.codeResult?.code;
+
+        if (!isValidScan(code)) return;
+
+        resultDiv.innerHTML = "Quagga: " + code;
+
+        Quagga.stop();
+        scannerActive = false;
+
+        onResult(code);
+    });
 }
 
-function handleDetection(QuaggaLib, data, video, modal, resultDiv, callback) {
-    if (!scannerActive || detectionLock) return;
-
-    const code = data.codeResult.code;
-    const now = Date.now();
-
-    if (lastScannedCode === code && (now - lastScanTime) < 2000) return;
-
-    detectionLock = true;
-    lastScannedCode = code;
-    lastScanTime = now;
-
-    resultDiv.innerHTML = `✅ تم مسح: ${code}`;
-
-    try {
-        QuaggaLib.offDetected();
-        QuaggaLib.stop();
-    } catch (e) {}
-
-    scannerActive = false;
-    currentScanner = null;
-
-    modal.style.display = 'none';
-
-    if (video.srcObject) {
-        video.srcObject.getTracks().forEach(track => track.stop());
-        video.srcObject = null;
-    }
-
-    setTimeout(() => {
-        detectionLock = false;
-    }, 1500);
-
-    callback(code);
-}
-
-async function startBarcodeScanner(targetInputId, retryCount = 0) {
-    const modal = document.getElementById('barcodeScannerModal');
-    const video = document.getElementById('scannerVideo');
-    const resultDiv = document.getElementById('scannerResult');
+/* =========================
+   MAIN GOD MODE START
+========================= */
+async function startBarcodeScanner(targetInputId) {
+    const modal = document.getElementById("barcodeScannerModal");
+    const video = document.getElementById("scannerVideo");
+    const resultDiv = document.getElementById("scannerResult");
 
     if (!modal || !video) return;
 
-    let QuaggaLib;
-
-    try {
-        QuaggaLib = await ensureQuaggaLoaded();
-    } catch {
-        resultDiv.innerHTML = '❌ فشل تحميل المكتبة';
-        modal.style.display = 'flex';
-        return;
-    }
-
-    const hasPermission = await requestCameraPermission();
-
-    if (!hasPermission) {
-        resultDiv.innerHTML = '❌ لا يوجد إذن للكاميرا';
-        modal.style.display = 'flex';
+    const ok = await requestCamera();
+    if (!ok) {
+        resultDiv.innerHTML = "No camera permission";
+        modal.style.display = "flex";
         return;
     }
 
     stopScannerAndClose();
 
-    modal.setAttribute('data-target', targetInputId);
-    modal.style.display = 'flex';
+    modal.setAttribute("data-target", targetInputId);
+    modal.style.display = "flex";
 
-    await initCameraPreview(video, resultDiv);
+    await startCamera(video, resultDiv);
 
-    QuaggaLib.init(createQuaggaConfig(video), (err) => {
-        if (err) {
-            resultDiv.innerHTML = '❌ خطأ في تشغيل الكاميرا';
-            return;
-        }
-
-        QuaggaLib.start();
-        currentScanner = QuaggaLib;
-        scannerActive = true;
-    });
-
-    QuaggaLib.offDetected();
-    QuaggaLib.onDetected((data) => {
-        handleDetection(
-            QuaggaLib,
-            data,
-            video,
-            modal,
-            resultDiv,
-            (code) => {
-                const targetInput = document.getElementById(targetInputId);
-                if (targetInput) targetInput.value = code;
-            }
-        );
+    // 🔥 ALWAYS START WITH ZXING
+    startZXing(video, resultDiv, (code) => {
+        const input = document.getElementById(targetInputId);
+        if (input) input.value = code;
     });
 }
 
+/* =========================
+   SEARCH MODE GOD
+========================= */
 async function startScannerForSearch() {
-    const modal = document.getElementById('barcodeScannerModal');
-    const video = document.getElementById('scannerVideo');
-    const resultDiv = document.getElementById('scannerResult');
+    const modal = document.getElementById("barcodeScannerModal");
+    const video = document.getElementById("scannerVideo");
+    const resultDiv = document.getElementById("scannerResult");
 
     if (!modal || !video) return;
 
-    let QuaggaLib;
-
-    try {
-        QuaggaLib = await ensureQuaggaLoaded();
-    } catch {
-        resultDiv.innerHTML = '❌ فشل تحميل المكتبة';
-        modal.style.display = 'flex';
-        return;
-    }
-
-    const hasPermission = await requestCameraPermission();
-
-    if (!hasPermission) {
-        resultDiv.innerHTML = '❌ لا يوجد إذن للكاميرا';
-        modal.style.display = 'flex';
+    const ok = await requestCamera();
+    if (!ok) {
+        resultDiv.innerHTML = "No camera permission";
+        modal.style.display = "flex";
         return;
     }
 
     stopScannerAndClose();
 
-    modal.style.display = 'flex';
+    modal.style.display = "flex";
 
-    await initCameraPreview(video, resultDiv);
+    await startCamera(video, resultDiv);
 
-    QuaggaLib.init(createQuaggaConfig(video), (err) => {
-        if (err) {
-            resultDiv.innerHTML = '❌ خطأ في الكاميرا';
-            return;
+    startZXing(video, resultDiv, async (code) => {
+
+        if (typeof window.findMedicineByBarcode === "function") {
+            window.findMedicineByBarcode(code);
+        } else {
+            const med = await db?.meds?.where("barcode").equals(code).first();
+            if (med) window.showMedDetails(med);
+            else alert("Not found");
         }
-
-        QuaggaLib.start();
-        currentScanner = QuaggaLib;
-        scannerActive = true;
-    });
-
-    QuaggaLib.offDetected();
-    QuaggaLib.onDetected((data) => {
-        handleDetection(
-            QuaggaLib,
-            data,
-            video,
-            modal,
-            resultDiv,
-            async (code) => {
-                if (typeof window.findMedicineByBarcode === 'function') {
-                    window.findMedicineByBarcode(code);
-                } else {
-                    const med = await db.meds.where('barcode').equals(code).first();
-                    if (med) window.showMedDetails(med);
-                    else alert('لم يتم العثور على دواء');
-                }
-            }
-        );
     });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-
-    const bind = (id, fn) => {
-        const el = document.getElementById(id);
-        if (el) el.onclick = fn;
-    };
-
-    bind('scanBarcodeBtn', () => startBarcodeScanner('medBarcode'));
-    bind('scanBarcodeGenBtn', () => startBarcodeScanner('genBarcode'));
-    bind('homeBarcodeBtn', startScannerForSearch);
-    bind('barcodeSearchBtn', startScannerForSearch);
-    bind('closeScannerModal', stopScannerAndClose);
-    bind('cancelScannerBtn', stopScannerAndClose);
-
-    const manualBarcodeBtn = document.getElementById('manualBarcodeBtn');
-
-    if (manualBarcodeBtn) {
-        manualBarcodeBtn.onclick = () => {
-            const barcode = prompt('أدخل الباركود:');
-
-            if (!barcode || !barcode.trim()) return;
-
-            const modal = document.getElementById('barcodeScannerModal');
-            const targetId = modal.getAttribute('data-target');
-            const targetInput = document.getElementById(targetId);
-
-            if (targetInput) targetInput.value = barcode.trim();
-
-            stopScannerAndClose();
-        };
-    }
-});
-
+/* =========================
+   EXPORTS
+========================= */
 window.startBarcodeScanner = startBarcodeScanner;
 window.startScannerForSearch = startScannerForSearch;
 window.stopScannerAndClose = stopScannerAndClose;
