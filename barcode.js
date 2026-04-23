@@ -1,9 +1,8 @@
 /* =========================================================
-   ULTIMATE ADAPTIVE BARCODE SCANNER SYSTEM
+   ULTIMATE ADAPTIVE BARCODE SCANNER SYSTEM (OPTIMIZED)
    ZXing → Quagga fallback
-   + Auto Zoom Lock
    + Scan History Buffer
-   + Blur Compensation
+   + Stable Detection + Duplicate Filter
 ========================================================= */
 
 let currentScanner = null;
@@ -151,77 +150,6 @@ async function startCamera(video, resultDiv) {
     resultDiv.innerHTML = "Scanning...";
 }
 
-/* =========================================================
-   🔍 VISUAL ENHANCEMENT LAYER (ZOOM + BLUR COMPENSATION)
-========================================================= */
-
-/* AUTO ZOOM LOCK (CENTER ROI FOCUS) */
-function applyDigitalZoom(video) {
-    try {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-
-        function loop() {
-            if (video.readyState >= 2) {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                const w = canvas.width * 0.6;
-                const h = canvas.height * 0.6;
-
-                const x = (canvas.width - w) / 2;
-                const y = (canvas.height - h) / 2;
-
-                const frame = ctx.getImageData(x, y, w, h);
-
-                ctx.putImageData(frame, x, y);
-            }
-
-            requestAnimationFrame(loop);
-        }
-
-        loop();
-    } catch {}
-}
-
-/* BLUR COMPENSATION (LIGHTWEIGHT SHARPEN SIMULATION) */
-function enhanceFrame(video) {
-    try {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-
-        function loop() {
-            if (video.readyState >= 2) {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-
-                ctx.drawImage(video, 0, 0);
-
-                let frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                let data = frame.data;
-
-                for (let i = 0; i < data.length; i += 4) {
-                    let avg = (data[i] + data[i+1] + data[i+2]) / 3;
-
-                    avg = avg < 128 ? avg * 0.92 : avg * 1.08;
-
-                    data[i] = avg;
-                    data[i+1] = avg;
-                    data[i+2] = avg;
-                }
-
-                ctx.putImageData(frame, 0, 0);
-            }
-
-            requestAnimationFrame(loop);
-        }
-
-        loop();
-    } catch {}
-}
-
 /* =========================
    ZXING ENGINE (PRIMARY)
 ========================= */
@@ -234,12 +162,13 @@ async function startZXing(video, resultDiv, onResult) {
 
     resultDiv.innerHTML = "ZXing scanning...";
 
+    /* fallback timer (optimized) */
     zxingTimer = setTimeout(() => {
         if (!fallbackTriggered) {
             fallbackTriggered = true;
             switchToQuagga(video, resultDiv, onResult);
         }
-    }, 4500);
+    }, 2500); // أسرع من السابق
 
     const devices = await ZXingLib.BrowserMultiFormatReader.listVideoInputDevices();
     const deviceId = devices?.[0]?.deviceId;
@@ -352,11 +281,7 @@ async function startBarcodeScanner(targetInputId) {
 
     await startCamera(video, resultDiv);
 
-    /* 🔥 VISUAL ENHANCEMENTS */
-    applyDigitalZoom(video);
-    enhanceFrame(video);
-
-    /* 🔥 START ENGINE */
+    /* START ENGINE */
     startZXing(video, resultDiv, (code) => {
         const input = document.getElementById(targetInputId);
         if (input) input.value = code;
@@ -385,9 +310,6 @@ async function startScannerForSearch() {
     modal.style.display = "flex";
 
     await startCamera(video, resultDiv);
-
-    applyDigitalZoom(video);
-    enhanceFrame(video);
 
     startZXing(video, resultDiv, async (code) => {
 
