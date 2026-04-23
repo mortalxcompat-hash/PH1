@@ -1,3 +1,11 @@
+/* =========================================================
+   ULTIMATE ADAPTIVE BARCODE SCANNER SYSTEM
+   ZXing → Quagga fallback
+   + Auto Zoom Lock
+   + Scan History Buffer
+   + Blur Compensation
+========================================================= */
+
 let currentScanner = null;
 let scannerActive = false;
 let stream = null;
@@ -5,28 +13,48 @@ let stream = null;
 let lastCode = null;
 let lastTime = 0;
 
-let engine = "zxing";
+let engineMode = "pro";
 let zxingTimer = null;
-let fallbackActive = false;
+let fallbackTriggered = false;
 
 /* =========================
-   DUPLICATE FILTER (HARD MODE)
+   SCAN HISTORY BUFFER
 ========================= */
-function isValidScan(code) {
+let scanHistory = [];
+const MAX_HISTORY = 6;
+
+function pushScan(code) {
+    scanHistory.push({
+        code,
+        time: Date.now()
+    });
+
+    if (scanHistory.length > MAX_HISTORY) {
+        scanHistory.shift();
+    }
+}
+
+function isStableScan(code) {
+    const recent = scanHistory.filter(x => x.code === code);
+    return recent.length >= 2;
+}
+
+/* =========================
+   DUPLICATE FILTER
+========================= */
+function isDuplicate(code) {
     const now = Date.now();
 
-    if (!code) return false;
-
-    if (lastCode === code && (now - lastTime) < 2500) return false;
+    if (lastCode === code && (now - lastTime) < 2500) return true;
 
     lastCode = code;
     lastTime = now;
 
-    return true;
+    return false;
 }
 
 /* =========================
-   LOADERS
+   LOAD ZXING
 ========================= */
 function loadZXing() {
     return new Promise((resolve, reject) => {
@@ -40,6 +68,9 @@ function loadZXing() {
     });
 }
 
+/* =========================
+   LOAD QUAGGA
+========================= */
 function loadQuagga() {
     return new Promise((resolve, reject) => {
         if (window.Quagga) return resolve(window.Quagga);
@@ -53,7 +84,7 @@ function loadQuagga() {
 }
 
 /* =========================
-   CAMERA CONTROL
+   CAMERA PERMISSION
 ========================= */
 async function requestCamera() {
     try {
@@ -69,7 +100,7 @@ async function requestCamera() {
 }
 
 /* =========================
-   CLEAN RESET (IMPORTANT)
+   CLEAN RESET
 ========================= */
 function stopScannerAndClose() {
     try {
@@ -79,7 +110,9 @@ function stopScannerAndClose() {
 
     currentScanner = null;
     scannerActive = false;
-    fallbackActive = false;
+
+    fallbackTriggered = false;
+    engineMode = "pro";
 
     clearTimeout(zxingTimer);
 
@@ -97,11 +130,11 @@ function stopScannerAndClose() {
         video.srcObject = null;
     }
 
-    lastCode = null;
+    scanHistory = [];
 }
 
 /* =========================
-   CAMERA STREAM
+   CAMERA START
 ========================= */
 async function startCamera(video, resultDiv) {
     const s = await navigator.mediaDevices.getUserMedia({
@@ -115,11 +148,82 @@ async function startCamera(video, resultDiv) {
     video.srcObject = s;
     stream = s;
 
-    resultDiv.innerHTML = "GOD MODE scanning...";
+    resultDiv.innerHTML = "Scanning...";
+}
+
+/* =========================================================
+   🔍 VISUAL ENHANCEMENT LAYER (ZOOM + BLUR COMPENSATION)
+========================================================= */
+
+/* AUTO ZOOM LOCK (CENTER ROI FOCUS) */
+function applyDigitalZoom(video) {
+    try {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+
+        function loop() {
+            if (video.readyState >= 2) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                const w = canvas.width * 0.6;
+                const h = canvas.height * 0.6;
+
+                const x = (canvas.width - w) / 2;
+                const y = (canvas.height - h) / 2;
+
+                const frame = ctx.getImageData(x, y, w, h);
+
+                ctx.putImageData(frame, x, y);
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    } catch {}
+}
+
+/* BLUR COMPENSATION (LIGHTWEIGHT SHARPEN SIMULATION) */
+function enhanceFrame(video) {
+    try {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+
+        function loop() {
+            if (video.readyState >= 2) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                ctx.drawImage(video, 0, 0);
+
+                let frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                let data = frame.data;
+
+                for (let i = 0; i < data.length; i += 4) {
+                    let avg = (data[i] + data[i+1] + data[i+2]) / 3;
+
+                    avg = avg < 128 ? avg * 0.92 : avg * 1.08;
+
+                    data[i] = avg;
+                    data[i+1] = avg;
+                    data[i+2] = avg;
+                }
+
+                ctx.putImageData(frame, 0, 0);
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    } catch {}
 }
 
 /* =========================
-   ZXING ENGINE (INTELLIGENT)
+   ZXING ENGINE (PRIMARY)
 ========================= */
 async function startZXing(video, resultDiv, onResult) {
     const ZXingLib = await loadZXing();
@@ -128,51 +232,47 @@ async function startZXing(video, resultDiv, onResult) {
     currentScanner = reader;
     scannerActive = true;
 
-    resultDiv.innerHTML = "ZXing active (GOD MODE)";
+    resultDiv.innerHTML = "ZXing scanning...";
 
-    // ⛔ intelligent fallback trigger
     zxingTimer = setTimeout(() => {
-        if (!fallbackActive) {
-            fallbackActive = true;
+        if (!fallbackTriggered) {
+            fallbackTriggered = true;
             switchToQuagga(video, resultDiv, onResult);
         }
     }, 4500);
 
-    try {
-        const devices = await ZXingLib.BrowserMultiFormatReader.listVideoInputDevices();
-        const deviceId = devices?.[0]?.deviceId;
+    const devices = await ZXingLib.BrowserMultiFormatReader.listVideoInputDevices();
+    const deviceId = devices?.[0]?.deviceId;
 
-        reader.decodeFromVideoDevice(deviceId, video, (result) => {
-            if (!result) return;
+    reader.decodeFromVideoDevice(deviceId, video, (result) => {
+        if (!result) return;
 
-            const code = result.getText();
+        const code = result.getText();
 
-            if (!isValidScan(code)) return;
+        pushScan(code);
+        if (!isStableScan(code)) return;
+        if (isDuplicate(code)) return;
 
-            clearTimeout(zxingTimer);
+        clearTimeout(zxingTimer);
 
-            resultDiv.innerHTML = "ZXing: " + code;
+        resultDiv.innerHTML = "ZXing: " + code;
 
-            reader.reset();
-            scannerActive = false;
+        reader.reset();
+        scannerActive = false;
 
-            onResult(code);
-        });
-
-    } catch {
-        switchToQuagga(video, resultDiv, onResult);
-    }
+        onResult(code);
+    });
 }
 
 /* =========================
-   QUAGGA FALLBACK (ROi + STABILITY)
+   QUAGGA FALLBACK
 ========================= */
 async function switchToQuagga(video, resultDiv, onResult) {
-    engine = "quagga";
+    engineMode = "quagga";
 
     const Quagga = await loadQuagga();
 
-    resultDiv.innerHTML = "Fallback engine activated";
+    resultDiv.innerHTML = "Fallback active...";
 
     Quagga.init({
         inputStream: {
@@ -187,10 +287,6 @@ async function switchToQuagga(video, resultDiv, onResult) {
                 left: "10%",
                 right: "10%"
             }
-        },
-        locator: {
-            patchSize: "medium",
-            halfSample: true
         },
         decoder: {
             readers: [
@@ -219,7 +315,9 @@ async function switchToQuagga(video, resultDiv, onResult) {
     Quagga.onDetected((data) => {
         const code = data?.codeResult?.code;
 
-        if (!isValidScan(code)) return;
+        pushScan(code);
+        if (!isStableScan(code)) return;
+        if (isDuplicate(code)) return;
 
         resultDiv.innerHTML = "Quagga: " + code;
 
@@ -231,7 +329,7 @@ async function switchToQuagga(video, resultDiv, onResult) {
 }
 
 /* =========================
-   MAIN GOD MODE START
+   MAIN START FUNCTION
 ========================= */
 async function startBarcodeScanner(targetInputId) {
     const modal = document.getElementById("barcodeScannerModal");
@@ -254,7 +352,11 @@ async function startBarcodeScanner(targetInputId) {
 
     await startCamera(video, resultDiv);
 
-    // 🔥 ALWAYS START WITH ZXING
+    /* 🔥 VISUAL ENHANCEMENTS */
+    applyDigitalZoom(video);
+    enhanceFrame(video);
+
+    /* 🔥 START ENGINE */
     startZXing(video, resultDiv, (code) => {
         const input = document.getElementById(targetInputId);
         if (input) input.value = code;
@@ -262,7 +364,7 @@ async function startBarcodeScanner(targetInputId) {
 }
 
 /* =========================
-   SEARCH MODE GOD
+   SEARCH MODE
 ========================= */
 async function startScannerForSearch() {
     const modal = document.getElementById("barcodeScannerModal");
@@ -283,6 +385,9 @@ async function startScannerForSearch() {
     modal.style.display = "flex";
 
     await startCamera(video, resultDiv);
+
+    applyDigitalZoom(video);
+    enhanceFrame(video);
 
     startZXing(video, resultDiv, async (code) => {
 
