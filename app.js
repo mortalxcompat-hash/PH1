@@ -55,7 +55,7 @@ const translations = {
         scan_barcode: 'مسح باركود', companies_sort: 'ترتيب الشركات', alphabetical: 'أبجدي',
         by_med_count: 'حسب عدد الأدوية', popular: 'الأكثر شيوعاً', medicine_count: 'عدد الأدوية',
         barcode_label: 'الباركود (اختياري)', back_to_companies: 'العودة إلى الشركات',
-        add_to_pharmacy: '➕ إضافة إلى الصيدلية', add_expiry: 'أدخل تاريخ الانتهاء للدواء الجديد',
+        add_to_pharmacy: 'إضافة إلى الصيدلية', add_expiry: 'أدخل تاريخ الانتهاء للدواء الجديد',
         added_to_pharmacy: 'تمت إضافة الدواء إلى الصيدلية', select_all: 'تحديد الكل',
         deselect_all: 'إلغاء الكل', long_press_guide: 'لتحديد دواء: اضغط مطولاً على أي دواء (0.8 ثانية) ثم اسحب إصبعك لأعلى/أسفل لتحديد عدة أدوية.',
         first_visit_welcome: 'مرحباً بك في مدير الصيدلية', dosage_form: 'الشكل الدوائي',
@@ -98,7 +98,7 @@ const translations = {
         companies_sort: 'Sort Companies', alphabetical: 'Alphabetical',
         by_med_count: 'By Medicine Count', popular: 'Popular', medicine_count: 'Medicine Count',
         barcode_label: 'Barcode (optional)', back_to_companies: 'Back to Companies',
-        add_to_pharmacy: '➕ Add to Pharmacy', add_expiry: 'Enter expiry date for the new medicine',
+        add_to_pharmacy: 'Add to Pharmacy', add_expiry: 'Enter expiry date for the new medicine',
         added_to_pharmacy: 'Medicine added to pharmacy', select_all: 'Select All',
         deselect_all: 'Deselect All', long_press_guide: 'To select medicine: press and hold any medicine (0.8 sec), then drag up/down to select multiple.',
         first_visit_welcome: 'Welcome to Pharmacy Manager', dosage_form: 'Dosage Form',
@@ -353,7 +353,7 @@ function updateAllText() {
         if (notifBtn) notifBtn.style.display = 'flex';
     } else {
         if (backBtn) backBtn.style.display = 'flex';
-        if (settingsBtn) settingsBtn.style.display = 'none';
+        if (settingsBtn) settingsBtn.style.display = 'flex';
         if (notifBtn) notifBtn.style.display = 'none';
     }
     
@@ -504,7 +504,7 @@ async function renderDeletedItems() {
     list.forEach(med => {
         const thumb = med.image ? `<img src="${med.image}" class="med-image-thumb">` : '<div class="med-image-thumb">💊</div>';
         const card = document.createElement('div'); card.className = 'med-card';
-        card.innerHTML = `<div class="med-info">${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div><div style="display:flex; gap:8px;"><button class="restore-btn small-btn" data-id="${med.id}">↩️ ${t('restore')}</button><button class="delete-permanently-btn small-btn" style="background:var(--danger);" data-id="${med.id}">🗑️ ${t('delete_permanently')}</button></div>`;
+        card.innerHTML = `<div class="med-info">${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div><div style="display:flex; gap:8px;"><button class="restore-btn small-btn" data-id="${med.id}">استعادة</button><button class="delete-permanently-btn small-btn" style="background:var(--danger);" data-id="${med.id}">🗑️ حذف نهائي</button></div>`;
         card.querySelector('.restore-btn')?.addEventListener('click',(e)=>{e.stopPropagation(); restoreFromDeleted(med.id);});
         card.querySelector('.delete-permanently-btn')?.addEventListener('click',(e)=>{e.stopPropagation(); permanentlyDelete(med.id);});
         listDiv.appendChild(card);
@@ -637,7 +637,7 @@ async function renderAllMedicines() {
     const container = document.getElementById('pageContent');
     container.innerHTML = `
         <div class="search-container"><div class="search-wrapper"><input type="text" id="search" placeholder="${t('search_placeholder')}"><button class="search-btn">${t('search_btn')}</button><button id="barcodeSearchBtn" class="barcode-search-btn">📷 باركود</button></div><div id="suggestionsBox" class="suggestions-list"></div></div>
-        <div class="filters-bar"><select id="sortBy" class="sort-select"><option value="expiry_asc">${t('closest_expiry')}</option><option value="expiry_desc">${t('farthest_expiry')}</option><option value="name_asc">${t('name_asc')}</option><option value="name_desc">${t('name_desc')}</option><option value="date_desc">${t('newest_first')}</option></select><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button><button id="batchAddToPharmacyBtn" class="plus-icon-btn" style="display:none;">➕ ${t('batch_add_to_pharmacy')}</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">${t('batch_delete')}</button><button id="addGeneralMedBtn" class="plus-icon-btn">➕ ${t('add_med')}</button></div>
+        <div class="filters-bar"><select id="sortBy" class="sort-select"><option value="expiry_asc">${t('closest_expiry')}</option><option value="expiry_desc">${t('farthest_expiry')}</option><option value="name_asc">${t('name_asc')}</option><option value="name_desc">${t('name_desc')}</option><option value="date_desc">${t('newest_first')}</option></select><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button><button id="batchAddToPharmacyBtn" class="plus-icon-btn" style="display:none;">${t('batch_add_to_pharmacy')}</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">🗑️ ${t('batch_delete')}</button><button id="addGeneralMedBtn" class="plus-icon-btn">${t('add_med')}</button></div>
         <div class="content-list" id="contentList"></div><div id="stats"></div>
     `;
     const searchInput = document.getElementById('search'), searchBtn = container.querySelector('.search-btn'), suggestionsBox = document.getElementById('suggestionsBox'), barcodeBtn = document.getElementById('barcodeSearchBtn'), sortSelect = document.getElementById('sortBy'), batchBtn = document.getElementById('batchDeleteBtn'), selectAllBtn = document.getElementById('selectAllBtn'), deselectAllBtn = document.getElementById('deselectAllBtn'), batchAddBtn = document.getElementById('batchAddToPharmacyBtn'), addGeneralBtn = document.getElementById('addGeneralMedBtn');
@@ -660,7 +660,7 @@ async function renderPharmacyMedicines() {
     const container = document.getElementById('pageContent');
     container.innerHTML = `
         <div class="search-container"><div class="search-wrapper"><input type="text" id="search" placeholder="${t('search_placeholder')}"><button class="search-btn">${t('search_btn')}</button><button id="barcodeSearchBtn" class="barcode-search-btn">📷 باركود</button></div><div id="suggestionsBox" class="suggestions-list"></div></div>
-        <div class="filters-bar"><select id="sortBy" class="sort-select"><option value="expiry_asc">${t('closest_expiry')}</option><option value="expiry_desc">${t('farthest_expiry')}</option><option value="name_asc">${t('name_asc')}</option><option value="name_desc">${t('name_desc')}</option><option value="date_desc">${t('newest_first')}</option></select><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">${t('batch_delete')}</button><button id="addMedBtn" class="plus-icon-btn">➕ ${t('add_med')}</button><button id="recycleBinBtn" class="recycle-bin-btn">🗑️ سلة المحذوفات</button></div>
+        <div class="filters-bar"><select id="sortBy" class="sort-select"><option value="expiry_asc">${t('closest_expiry')}</option><option value="expiry_desc">${t('farthest_expiry')}</option><option value="name_asc">${t('name_asc')}</option><option value="name_desc">${t('name_desc')}</option><option value="date_desc">${t('newest_first')}</option></select><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">🗑️ ${t('batch_delete')}</button><button id="addMedBtn" class="plus-icon-btn">${t('add_med')}</button><button id="recycleBinBtn" class="recycle-bin-btn">🗑️ سلة المحذوفات</button></div>
         <div class="content-list" id="contentList"></div><div id="stats"></div>
     `;
     document.getElementById('addMedBtn')?.addEventListener('click', showAddFormModal);
@@ -843,8 +843,8 @@ async function renderCompaniesPage() {
     }
     container.innerHTML = `
         <div class="search-container"><div class="search-wrapper"><input id="companySearch" placeholder="🔍 بحث عن شركة..."><button id="searchCompanyBtn">${t('search_btn')}</button></div><div id="suggestionsBox" class="suggestions-list"></div></div>
-        <div class="companies-sort-bar" style="display:flex; gap:10px; margin:12px 0; flex-wrap:wrap;"><label>${t('companies_sort')}</label><select id="companiesSort" class="sort-select"><option value="alpha">${t('alphabetical')}</option><option value="count_desc">${t('by_med_count')} (تنازلي)</option><option value="count_asc">${t('by_med_count')} (تصاعدي)</option><option value="popular">${t('popular')}</option></select><button id="addCompanyBtn" class="main-btn">➕ إضافة شركة جديدة</button><button id="batchModeBtn" class="main-btn" style="background:var(--warning)">📌 تحديد متعدد</button><button id="selectAllCompaniesBtn" class="main-btn" style="background:var(--success); display:none;">✅ تحديد الكل</button></div>
-        <div id="batchActionsBar" class="batch-actions-bar" style="display:none;"><button id="batchRenameBtn" class="batch-rename-btn">✏️ تعديل جماعي (0)</button><button id="batchDeleteCompaniesBtn" class="batch-delete-entity-btn">🗑️ حذف جماعي</button><button id="batchCancelBtn" class="batch-cancel-btn">إلغاء التحديد</button></div>
+        <div class="companies-sort-bar" style="display:flex; gap:10px; margin:12px 0; flex-wrap:wrap;"><label>${t('companies_sort')}</label><select id="companiesSort" class="sort-select"><option value="alpha">${t('alphabetical')}</option><option value="count_desc">${t('by_med_count')} (تنازلي)</option><option value="count_asc">${t('by_med_count')} (تصاعدي)</option><option value="popular">${t('popular')}</option></select><button id="addCompanyBtn" class="main-btn">إضافة شركة جديدة</button><button id="batchModeBtn" class="main-btn" style="background:var(--warning)">تحديد متعدد</button><button id="selectAllCompaniesBtn" class="main-btn" style="background:var(--success); display:none;">تحديد الكل</button></div>
+        <div id="batchActionsBar" class="batch-actions-bar" style="display:none;"><button id="batchRenameBtn" class="batch-rename-btn">تعديل جماعي (0)</button><button id="batchDeleteCompaniesBtn" class="batch-delete-entity-btn">🗑️ حذف جماعي</button><button id="batchCancelBtn" class="batch-cancel-btn">إلغاء التحديد</button></div>
         <div id="companiesList"></div>
     `;
 
@@ -902,13 +902,13 @@ async function renderCompaniesPage() {
                 batchBar.style.display = 'flex';
                 if (selectAllCompaniesBtn) selectAllCompaniesBtn.style.display = 'inline-flex';
                 batchModeBtn.style.background = 'var(--success)';
-                batchModeBtn.innerText = '❌ إلغاء التحديد';
+                batchModeBtn.innerText = 'إلغاء التحديد';
                 renderCompaniesInBatchMode();
             } else {
                 batchBar.style.display = 'none';
                 if (selectAllCompaniesBtn) selectAllCompaniesBtn.style.display = 'none';
                 batchModeBtn.style.background = 'var(--warning)';
-                batchModeBtn.innerText = ' تحديد متعدد';
+                batchModeBtn.innerText = 'تحديد متعدد';
                 selectedCompanies.clear();
                 renderCompaniesPage();
             }
@@ -929,7 +929,7 @@ async function renderCompaniesPage() {
     if (deleteBtn) deleteBtn.addEventListener('click', batchDeleteCompanies);
     if (cancelBtn) cancelBtn.addEventListener('click', () => {
         selectedCompanies.clear();
-        renameBtn.innerText = ' تعديل جماعي (0)';
+        renameBtn.innerText = 'تعديل جماعي (0)';
         renderCompaniesPage();
     });
 
@@ -983,7 +983,7 @@ async function renderCompaniesInBatchMode() {
             if (e.target === del) return;
             if (batchMode) {
                 toggleSelectCompany(comp);
-                document.getElementById('batchRenameBtn').innerText = `✏️ تعديل جماعي (${selectedCompanies.size})`;
+                document.getElementById('batchRenameBtn').innerText = `تعديل جماعي (${selectedCompanies.size})`;
             } else {
                 showCompanyMedicines(comp);
             }
@@ -993,7 +993,7 @@ async function renderCompaniesInBatchMode() {
 
 function updateBatchRenameBtnCount() {
     const btn = document.getElementById('batchRenameBtn');
-    if (btn) btn.innerText = ` تعديل جماعي (${selectedCompanies.size})`;
+    if (btn) btn.innerText = `تعديل جماعي (${selectedCompanies.size})`;
 }
 
 async function displayCompanies(searchTerm, sortType) {
@@ -1110,11 +1110,11 @@ async function renderCategoriesPage() {
         return;
     }
     container.innerHTML = `
-        <button class="main-btn" id="addCategoryBtn" style="margin-bottom:16px;">➕ إضافة تصنيف جديد</button>
-        <button id="batchModeCategoriesBtn" class="main-btn" style="background:var(--warning); margin-bottom:16px;">📌 تحديد متعدد</button>
-        <button id="selectAllCategoriesBtn" class="main-btn" style="background:var(--success); display:none;">✅ تحديد الكل</button>
+        <button class="main-btn" id="addCategoryBtn" style="margin-bottom:16px;">إضافة تصنيف جديد</button>
+        <button id="batchModeCategoriesBtn" class="main-btn" style="background:var(--warning); margin-bottom:16px;">تحديد متعدد</button>
+        <button id="selectAllCategoriesBtn" class="main-btn" style="background:var(--success); display:none;">تحديد الكل</button>
         <div id="batchActionsCategoriesBar" class="batch-actions-bar" style="display:none;">
-            <button id="batchRenameCategoriesBtn" class="batch-rename-btn">✏️ تعديل جماعي (0)</button>
+            <button id="batchRenameCategoriesBtn" class="batch-rename-btn">تعديل جماعي (0)</button>
             <button id="batchDeleteCategoriesBtn" class="batch-delete-entity-btn">🗑️ حذف جماعي</button>
             <button id="batchCancelCategoriesBtn" class="batch-cancel-btn">إلغاء التحديد</button>
         </div>
@@ -1135,13 +1135,13 @@ async function renderCategoriesPage() {
                 batchBar.style.display = 'flex';
                 if (selectAllCategoriesBtn) selectAllCategoriesBtn.style.display = 'inline-flex';
                 batchModeBtn.style.background = 'var(--success)';
-                batchModeBtn.innerText = '❌ إلغاء التحديد';
+                batchModeBtn.innerText = 'إلغاء التحديد';
                 renderCategoriesInBatchMode(cats, catsMap);
             } else {
                 batchBar.style.display = 'none';
                 if (selectAllCategoriesBtn) selectAllCategoriesBtn.style.display = 'none';
                 batchModeBtn.style.background = 'var(--warning)';
-                batchModeBtn.innerText = ' تحديد متعدد';
+                batchModeBtn.innerText = 'تحديد متعدد';
                 selectedCategories.clear();
                 renderCategoriesPage();
             }
@@ -1162,7 +1162,7 @@ async function renderCategoriesPage() {
     if (deleteBtn) deleteBtn.addEventListener('click', batchDeleteCategories);
     if (cancelBtn) cancelBtn.addEventListener('click', () => {
         selectedCategories.clear();
-        renameBtn.innerText = ' تعديل جماعي (0)';
+        renameBtn.innerText = 'تعديل جماعي (0)';
         renderCategoriesPage();
     });
 
@@ -1241,7 +1241,7 @@ function renderCategoriesInBatchMode(cats, catsMap) {
 
 function updateBatchRenameCategoriesCount() {
     const btn = document.getElementById('batchRenameCategoriesBtn');
-    if (btn) btn.innerText = ` تعديل جماعي (${selectedCategories.size})`;
+    if (btn) btn.innerText = `تعديل جماعي (${selectedCategories.size})`;
 }
 
 function addNewCategoryForList() {
