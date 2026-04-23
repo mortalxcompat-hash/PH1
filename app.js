@@ -908,7 +908,7 @@ async function renderCompaniesPage() {
                 batchBar.style.display = 'none';
                 if (selectAllCompaniesBtn) selectAllCompaniesBtn.style.display = 'none';
                 batchModeBtn.style.background = 'var(--warning)';
-                batchModeBtn.innerText = '📌 تحديد متعدد';
+                batchModeBtn.innerText = ' تحديد متعدد';
                 selectedCompanies.clear();
                 renderCompaniesPage();
             }
@@ -929,7 +929,7 @@ async function renderCompaniesPage() {
     if (deleteBtn) deleteBtn.addEventListener('click', batchDeleteCompanies);
     if (cancelBtn) cancelBtn.addEventListener('click', () => {
         selectedCompanies.clear();
-        renameBtn.innerText = '✏️ تعديل جماعي (0)';
+        renameBtn.innerText = ' تعديل جماعي (0)';
         renderCompaniesPage();
     });
 
@@ -993,7 +993,7 @@ async function renderCompaniesInBatchMode() {
 
 function updateBatchRenameBtnCount() {
     const btn = document.getElementById('batchRenameBtn');
-    if (btn) btn.innerText = `✏️ تعديل جماعي (${selectedCompanies.size})`;
+    if (btn) btn.innerText = ` تعديل جماعي (${selectedCompanies.size})`;
 }
 
 async function displayCompanies(searchTerm, sortType) {
@@ -1141,7 +1141,7 @@ async function renderCategoriesPage() {
                 batchBar.style.display = 'none';
                 if (selectAllCategoriesBtn) selectAllCategoriesBtn.style.display = 'none';
                 batchModeBtn.style.background = 'var(--warning)';
-                batchModeBtn.innerText = '📌 تحديد متعدد';
+                batchModeBtn.innerText = ' تحديد متعدد';
                 selectedCategories.clear();
                 renderCategoriesPage();
             }
@@ -1162,7 +1162,7 @@ async function renderCategoriesPage() {
     if (deleteBtn) deleteBtn.addEventListener('click', batchDeleteCategories);
     if (cancelBtn) cancelBtn.addEventListener('click', () => {
         selectedCategories.clear();
-        renameBtn.innerText = '✏️ تعديل جماعي (0)';
+        renameBtn.innerText = ' تعديل جماعي (0)';
         renderCategoriesPage();
     });
 
@@ -1241,7 +1241,7 @@ function renderCategoriesInBatchMode(cats, catsMap) {
 
 function updateBatchRenameCategoriesCount() {
     const btn = document.getElementById('batchRenameCategoriesBtn');
-    if (btn) btn.innerText = `✏️ تعديل جماعي (${selectedCategories.size})`;
+    if (btn) btn.innerText = ` تعديل جماعي (${selectedCategories.size})`;
 }
 
 function addNewCategoryForList() {
@@ -1597,39 +1597,39 @@ function openSettingsModal() {
     }
     container.innerHTML = `
         <div class="settings-card" data-page="language">
-            <div class="settings-card-left"><span class="settings-card-icon">🌐</span><span class="settings-card-title">${t('language')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('language')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="darkmode">
-            <div class="settings-card-left"><span class="settings-card-icon">🌙</span><span class="settings-card-title">${t('dark_mode')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('dark_mode')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="color">
-            <div class="settings-card-left"><span class="settings-card-icon">🎨</span><span class="settings-card-title">${t('change_color')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('change_color')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="notify">
-            <div class="settings-card-left"><span class="settings-card-icon">⏰</span><span class="settings-card-title">${t('notification_days')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('notification_days')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="defaultExpiry">
-            <div class="settings-card-left"><span class="settings-card-icon">📅</span><span class="settings-card-title">${t('default_expiry')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('default_expiry')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="searchHistory">
-            <div class="settings-card-left"><span class="settings-card-icon">🔍</span><span class="settings-card-title">${t('search_history')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('search_history')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="backupRestore">
-            <div class="settings-card-left"><span class="settings-card-icon">💾</span><span class="settings-card-title">${t('backup_restore')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('backup_restore')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="exportCSVPDF">
-            <div class="settings-card-left"><span class="settings-card-icon">📄</span><span class="settings-card-title">${t('export_csv')} / PDF</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('export_csv')} / PDF</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
         <div class="settings-card" data-page="about">
-            <div class="settings-card-left"><span class="settings-card-icon">ℹ️</span><span class="settings-card-title">${t('about_app')}</span></div>
+            <div class="settings-card-left"><span class="settings-card-icon"></span><span class="settings-card-title">${t('about_app')}</span></div>
             <span class="settings-card-arrow">→</span>
         </div>
     `;
