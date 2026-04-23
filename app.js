@@ -1591,6 +1591,10 @@ window.addNewCategory = function (inputId) {
 
 function openSettingsModal() {
     const container = document.getElementById('settingsContent');
+    if (!container) {
+        console.error('settingsContent element not found');
+        return;
+    }
     container.innerHTML = `
         <div class="settings-card" data-page="language">
             <div class="settings-card-left"><span class="settings-card-icon">🌐</span><span class="settings-card-title">${t('language')}</span></div>
@@ -1630,17 +1634,30 @@ function openSettingsModal() {
         </div>
     `;
     container.querySelectorAll('.settings-card').forEach(card => {
-        card.addEventListener('click', () => {
+        card.addEventListener('click', (e) => {
+            e.stopPropagation();
             const page = card.getAttribute('data-page');
-            if (page === 'color') showColorModal();
-            else if (page === 'language') showLanguageModal();
-            else if (page === 'darkmode') toggleDarkMode();
-            else if (page === 'notify') showNotifySettings();
-            else if (page === 'defaultExpiry') showDefaultExpirySettings();
-            else if (page === 'searchHistory') showSearchHistorySettings();
-            else if (page === 'backupRestore') showBackupRestoreSettings();
-            else if (page === 'exportCSVPDF') showExportSettings();
-            else if (page === 'about') showAbout();
+            if (page === 'color') {
+                showColorModal();
+            } else if (page === 'language') {
+                showLanguageModal();
+            } else if (page === 'darkmode') {
+                toggleDarkMode();
+                closeModal('settingsModal');
+                setTimeout(() => openSettingsModal(), 100);
+            } else if (page === 'notify') {
+                showNotifySettings();
+            } else if (page === 'defaultExpiry') {
+                showDefaultExpirySettings();
+            } else if (page === 'searchHistory') {
+                showSearchHistorySettings();
+            } else if (page === 'backupRestore') {
+                showBackupRestoreSettings();
+            } else if (page === 'exportCSVPDF') {
+                showExportSettings();
+            } else if (page === 'about') {
+                showAbout();
+            }
         });
     });
     openModal('settingsModal');
@@ -1648,28 +1665,32 @@ function openSettingsModal() {
 
 function showLanguageModal() {
     openModal('languageModal');
-    document.querySelectorAll('.lang-option').forEach(btn => {
-        btn.removeEventListener('click', handleLangChange);
-        btn.addEventListener('click', handleLangChange);
+    const langOptions = document.querySelectorAll('.lang-option');
+    langOptions.forEach(btn => {
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode.replaceChild(newBtn, btn);
+        newBtn.addEventListener('click', function() {
+            const newLang = this.getAttribute('data-lang');
+            if (confirm(currentLang === 'ar' ? `تغيير اللغة إلى ${newLang === 'ar' ? 'العربية' : 'الإنجليزية'}؟` : `Change language to ${newLang === 'ar' ? 'Arabic' : 'English'}?`)) {
+                changeLanguage(newLang);
+                closeModal('languageModal');
+                closeModal('settingsModal');
+                setTimeout(() => openSettingsModal(), 100);
+            }
+        });
     });
-}
-
-function handleLangChange(e) {
-    const newLang = e.currentTarget.getAttribute('data-lang');
-    if (confirm(currentLang === 'ar' ? `تغيير اللغة إلى ${newLang === 'ar' ? 'العربية' : 'الإنجليزية'}؟` : `Change language to ${newLang === 'ar' ? 'Arabic' : 'English'}?`)) {
-        changeLanguage(newLang);
-        closeModal('languageModal');
-    }
 }
 
 function showNotifySettings() {
     const days = prompt(t('notification_days'), localStorage.getItem('notificationDays') || '7');
-    if (days && !isNaN(days)) {
+    if (days !== null && !isNaN(days)) {
         const d = parseInt(days);
         if (d >= 1 && d <= 90) {
             localStorage.setItem('notificationDays', d);
             alert(t('notification_set'));
-        } else alert(currentLang === 'ar' ? 'يجب أن تكون القيمة بين 1 و 90' : 'Value must be between 1 and 90');
+        } else {
+            alert(currentLang === 'ar' ? 'يجب أن تكون القيمة بين 1 و 90' : 'Value must be between 1 and 90');
+        }
     }
 }
 
@@ -1680,44 +1701,105 @@ function showDefaultExpirySettings() {
         if (!isNaN(period) && period >= 0 && period <= 3650) {
             localStorage.setItem('defaultExpiryPeriod', period);
             alert(t('default_expiry_set'));
-        } else alert(currentLang === 'ar' ? 'قيمة غير صالحة' : 'Invalid value');
+        } else {
+            alert(currentLang === 'ar' ? 'قيمة غير صالحة' : 'Invalid value');
+        }
     }
 }
 
 function showSearchHistorySettings() {
     const container = document.getElementById('settingsContent');
-    const cats = [{ key: 'all', label: 'كل الأدوية' }, { key: 'pharmacy', label: 'أدوية الصيدلية' }, { key: 'companies', label: 'الشركات' }, { key: 'expiring', label: 'المنتهية قريباً' }];
-    let html = '<div class="settings-page-header"><button class="settings-back-btn">←</button><div class="settings-page-title">سجل البحث</div></div><div id="searchHistoryContent"></div>';
+    if (!container) return;
+    const cats = [
+        { key: 'all', label: 'كل الأدوية' },
+        { key: 'pharmacy', label: 'أدوية الصيدلية' },
+        { key: 'companies', label: 'الشركات' },
+        { key: 'expiring', label: 'المنتهية قريباً' }
+    ];
+    let html = `
+        <div class="settings-page-header">
+            <button class="settings-back-btn" id="settingsBackBtn">←</button>
+            <div class="settings-page-title">${t('search_history')}</div>
+        </div>
+        <div id="searchHistoryContent"></div>
+    `;
     container.innerHTML = html;
-    document.querySelector('.settings-back-btn')?.addEventListener('click', openSettingsModal);
+    const backBtn = document.getElementById('settingsBackBtn');
+    if (backBtn) {
+        backBtn.addEventListener('click', () => {
+            openSettingsModal();
+        });
+    }
     const contentDiv = document.getElementById('searchHistoryContent');
+    if (!contentDiv) return;
     for (let cat of cats) {
         const searches = recentSearches[cat.key] || [];
-        contentDiv.innerHTML += `<div class="history-category"><div class="history-category-title"><span>${cat.label}</span><button class="small-btn danger-btn" data-clear="${cat.key}">مسح الكل</button></div><div class="history-items">${searches.map(s => `<div class="history-item"><span>${escapeHtml(s)}</span><button class="delete-history" data-category="${cat.key}" data-term="${escapeHtml(s)}">✖</button></div>`).join('')}${searches.length === 0 ? '<span class="empty-state">لا توجد عمليات بحث سابقة</span>' : ''}</div></div>`;
+        contentDiv.innerHTML += `
+            <div class="history-category">
+                <div class="history-category-title">
+                    <span>${cat.label}</span>
+                    <button class="small-btn danger-btn" data-clear="${cat.key}">مسح الكل</button>
+                </div>
+                <div class="history-items">
+                    ${searches.map(s => `
+                        <div class="history-item">
+                            <span>${escapeHtml(s)}</span>
+                            <button class="delete-history" data-category="${cat.key}" data-term="${escapeHtml(s)}">✖</button>
+                        </div>
+                    `).join('')}
+                    ${searches.length === 0 ? '<span class="empty-state">لا توجد عمليات بحث سابقة</span>' : ''}
+                </div>
+            </div>
+        `;
     }
-    contentDiv.querySelectorAll('[data-clear]').forEach(btn => btn.addEventListener('click', () => { clearSearchHistory(btn.getAttribute('data-clear')); showSearchHistorySettings(); }));
-    contentDiv.querySelectorAll('.delete-history').forEach(btn => btn.addEventListener('click', () => {
-        const cat = btn.getAttribute('data-category'), term = btn.getAttribute('data-term');
-        recentSearches[cat] = recentSearches[cat].filter(s => s !== term);
-        localStorage.setItem(`recentSearches_${cat}`, JSON.stringify(recentSearches[cat]));
-        showSearchHistorySettings();
-        if (cat === 'all' && currentPage === 'all') renderAllMedicines();
-        else if (cat === 'pharmacy' && currentPage === 'pharmacy') renderPharmacyMedicines();
-        else if (cat === 'companies' && currentPage === 'companies') renderCompaniesPage();
-        else if (cat === 'expiring' && currentPage === 'expiring') renderExpiringSoonPage();
-    }));
+    contentDiv.querySelectorAll('[data-clear]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const key = btn.getAttribute('data-clear');
+            clearSearchHistory(key);
+            showSearchHistorySettings();
+        });
+    });
+    contentDiv.querySelectorAll('.delete-history').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const category = btn.getAttribute('data-category');
+            const term = btn.getAttribute('data-term');
+            recentSearches[category] = recentSearches[category].filter(s => s !== term);
+            localStorage.setItem(`recentSearches_${category}`, JSON.stringify(recentSearches[category]));
+            showSearchHistorySettings();
+            if (category === 'all' && currentPage === 'all') renderAllMedicines();
+            else if (category === 'pharmacy' && currentPage === 'pharmacy') renderPharmacyMedicines();
+            else if (category === 'companies' && currentPage === 'companies') renderCompaniesPage();
+            else if (category === 'expiring' && currentPage === 'expiring') renderExpiringSoonPage();
+        });
+    });
 }
 
 function showBackupRestoreSettings() {
     const container = document.getElementById('settingsContent');
     container.innerHTML = `
-        <div class="settings-page-header"><button class="settings-back-btn">←</button><div class="settings-page-title">${t('backup_restore')}</div></div>
+        <div class="settings-page-header">
+            <button class="settings-back-btn" id="settingsBackBtn">←</button>
+            <div class="settings-page-title">${t('backup_restore')}</div>
+        </div>
         <div class="import-export-grid">
-            <div class="import-export-item"><span>${t('all_medicines')}</span><div><button id="exportGeneralBtn" class="small-btn">${t('export_db')}</button><label class="small-btn">${t('import_db')}<input type="file" id="importGeneralInput" accept=".json" style="display:none;"></label></div></div>
-            <div class="import-export-item"><span>${t('pharmacy_medicines')}</span><div><button id="exportPharmacyBtn" class="small-btn">${t('export_db')}</button><label class="small-btn">${t('import_db')}<input type="file" id="importPharmacyInput" accept=".json" style="display:none;"></label></div></div>
+            <div class="import-export-item">
+                <span>${t('all_medicines')}</span>
+                <div class="import-export-buttons">
+                    <button id="exportGeneralBtn" class="small-btn">${t('export_db')}</button>
+                    <label class="small-btn">${t('import_db')}<input type="file" id="importGeneralInput" accept=".json" style="display:none;"></label>
+                </div>
+            </div>
+            <div class="import-export-item">
+                <span>${t('pharmacy_medicines')}</span>
+                <div class="import-export-buttons">
+                    <button id="exportPharmacyBtn" class="small-btn">${t('export_db')}</button>
+                    <label class="small-btn">${t('import_db')}<input type="file" id="importPharmacyInput" accept=".json" style="display:none;"></label>
+                </div>
+            </div>
         </div>
     `;
-    document.querySelector('.settings-back-btn')?.addEventListener('click', openSettingsModal);
+    const backBtn = document.getElementById('settingsBackBtn');
+    if (backBtn) backBtn.addEventListener('click', () => openSettingsModal());
     document.getElementById('exportGeneralBtn')?.addEventListener('click', () => exportByType(MED_TYPES.GENERAL, 'general_medicines', true));
     document.getElementById('importGeneralInput')?.addEventListener('change', e => importGeneral(e.target.files[0]));
     document.getElementById('exportPharmacyBtn')?.addEventListener('click', () => exportByType(MED_TYPES.PHARMACY, 'pharmacy_medicines', false));
@@ -1727,10 +1809,17 @@ function showBackupRestoreSettings() {
 function showExportSettings() {
     const container = document.getElementById('settingsContent');
     container.innerHTML = `
-        <div class="settings-page-header"><button class="settings-back-btn">←</button><div class="settings-page-title">${t('export_csv')} / PDF</div></div>
-        <div style="display:flex; gap:12px; justify-content:center;"><button id="exportCsvBtn" class="save-btn">CSV</button><button id="exportPdfBtn" class="save-btn">PDF</button></div>
+        <div class="settings-page-header">
+            <button class="settings-back-btn" id="settingsBackBtn">←</button>
+            <div class="settings-page-title">${t('export_csv')} / PDF</div>
+        </div>
+        <div style="display:flex; gap:12px; justify-content:center;">
+            <button id="exportCsvBtn" class="save-btn">CSV</button>
+            <button id="exportPdfBtn" class="save-btn">PDF</button>
+        </div>
     `;
-    document.querySelector('.settings-back-btn')?.addEventListener('click', openSettingsModal);
+    const backBtn = document.getElementById('settingsBackBtn');
+    if (backBtn) backBtn.addEventListener('click', () => openSettingsModal());
     document.getElementById('exportCsvBtn')?.addEventListener('click', exportCSV);
     document.getElementById('exportPdfBtn')?.addEventListener('click', exportPDF);
 }
@@ -1738,10 +1827,14 @@ function showExportSettings() {
 function showAbout() {
     const container = document.getElementById('settingsContent');
     container.innerHTML = `
-        <div class="settings-page-header"><button class="settings-back-btn">←</button><div class="settings-page-title">${t('about_app')}</div></div>
+        <div class="settings-page-header">
+            <button class="settings-back-btn" id="settingsBackBtn">←</button>
+            <div class="settings-page-title">${t('about_app')}</div>
+        </div>
         <p style="text-align:center; margin-top:20px;">${t('about_text')}</p>
     `;
-    document.querySelector('.settings-back-btn')?.addEventListener('click', openSettingsModal);
+    const backBtn = document.getElementById('settingsBackBtn');
+    if (backBtn) backBtn.addEventListener('click', () => openSettingsModal());
 }
 
 async function exportByType(type, filename, useOrig = false) {
@@ -1976,6 +2069,13 @@ function toggleDarkMode() {
     document.body.classList.toggle('dark');
     localStorage.setItem('darkMode', document.body.classList.contains('dark'));
     if (currentPage === 'home') updateBarChart();
+    const savedColor = localStorage.getItem('appColor');
+    if (savedColor) {
+        try {
+            const color = JSON.parse(savedColor);
+            applyAppColor(color);
+        } catch(e) { console.error(e); }
+    }
 }
 
 function clearSearchHistory(pageKey) {
@@ -2140,3 +2240,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     switchPage('home');
     checkAndSendExpiryNotifications();
 });
+
