@@ -1,6 +1,8 @@
 let currentScanner = null;
 let scannerActive = false;
 let stream = null;
+let lastScannedCode = null;
+let lastScanTime = 0;
 
 function ensureQuaggaLoaded() {
     return new Promise((resolve, reject) => {
@@ -68,6 +70,7 @@ function stopScannerAndClose() {
         video.srcObject.getTracks().forEach(track => track.stop());
         video.srcObject = null;
     }
+    lastScannedCode = null;
 }
 
 async function startBarcodeScanner(targetInputId, retryCount = 0) {
@@ -132,7 +135,16 @@ async function startBarcodeScanner(targetInputId, retryCount = 0) {
             }
         },
         decoder: {
-            readers: ["ean_reader", "ean_8_reader", "code_128_reader", "code_39_reader", "upc_reader", "codabar_reader"]
+            readers: [
+                "ean_reader",        // مهم لقراءة EAN-13 (13 رقم) - هذا هو الأهم للأكواد في الصورة
+                "ean_8_reader",      // لقراءة EAN-8 (8 أرقام)
+                "code_128_reader",   // لقراءة Code 128
+                "code_39_reader",    // لقراءة Code 39
+                "upc_reader",        // لقراءة UPC-A (12 رقم)
+                "upc_e_reader",      // لقراءة UPC-E
+                "codabar_reader"     // لقراءة Codabar
+            ],
+            multiple: false
         },
         locate: true,
         numOfWorkers: navigator.hardwareConcurrency || 2
@@ -157,7 +169,18 @@ async function startBarcodeScanner(targetInputId, retryCount = 0) {
     QuaggaLib.offDetected();
     QuaggaLib.onDetected((data) => {
         if (!scannerActive) return;
+        
         const code = data.codeResult.code;
+        const now = Date.now();
+        
+        // منع القراءة المتكررة لنفس الكود خلال ثانيتين
+        if (lastScannedCode === code && (now - lastScanTime) < 2000) {
+            return;
+        }
+        
+        lastScannedCode = code;
+        lastScanTime = now;
+        
         resultDiv.innerHTML = `✅ تم مسح: ${code}`;
         QuaggaLib.stop();
         scannerActive = false;
@@ -229,7 +252,16 @@ async function startScannerForSearch() {
             }
         },
         decoder: {
-            readers: ["ean_reader", "ean_8_reader", "code_128_reader", "code_39_reader", "upc_reader", "codabar_reader"]
+            readers: [
+                "ean_reader",
+                "ean_8_reader",
+                "code_128_reader",
+                "code_39_reader",
+                "upc_reader",
+                "upc_e_reader",
+                "codabar_reader"
+            ],
+            multiple: false
         },
         locate: true,
         numOfWorkers: navigator.hardwareConcurrency || 2
@@ -251,7 +283,17 @@ async function startScannerForSearch() {
     QuaggaLib.offDetected();
     QuaggaLib.onDetected(async (data) => {
         if (!scannerActive) return;
+        
         const code = data.codeResult.code;
+        const now = Date.now();
+        
+        if (lastScannedCode === code && (now - lastScanTime) < 2000) {
+            return;
+        }
+        
+        lastScannedCode = code;
+        lastScanTime = now;
+        
         resultDiv.innerHTML = `✅ تم مسح: ${code}`;
         QuaggaLib.stop();
         scannerActive = false;
