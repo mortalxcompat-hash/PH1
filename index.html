@@ -23,6 +23,7 @@
         <button id="notifBtn" class="header-btn notif-btn">🔔<span id="notifBadge" class="badge"></span></button>
         <div id="appTitle" class="app-title">Pharmacy Manager</div>
         <button id="settingsHeaderBtn" class="header-btn settings-btn">⚙️</button>
+        <button id="headerBackBtn" class="header-btn back-header-btn" style="display: none;">←</button>
     </div>
     <div id="pageContent" class="page-content"></div>
 
@@ -58,16 +59,28 @@
                 <div class="form-row"><input type="text" id="dosageForm" placeholder="الشكل الدوائي" class="form-input"><input type="text" id="dosage" placeholder="الجرعة" class="form-input"></div>
                 <div class="form-row expiry-row">
                     <div class="expiry-input-group">
-                        <input type="date" id="medExpiry1" class="form-input expiry-date">
+                        <div class="custom-date-picker" id="expiry1Picker">
+                            <input type="text" id="medExpiry1Display" placeholder="اختر التاريخ" readonly class="form-input expiry-date-input">
+                            <div class="date-picker-dropdown" id="expiry1Dropdown" style="display:none;"></div>
+                        </div>
                         <label class="expiry-label">تاريخ الانتهاء 1 *</label>
+                        <input type="hidden" id="medExpiry1">
                     </div>
                     <div class="expiry-input-group">
-                        <input type="date" id="medExpiry2" class="form-input expiry-date">
+                        <div class="custom-date-picker" id="expiry2Picker">
+                            <input type="text" id="medExpiry2Display" placeholder="اختر التاريخ" readonly class="form-input expiry-date-input">
+                            <div class="date-picker-dropdown" id="expiry2Dropdown" style="display:none;"></div>
+                        </div>
                         <label class="expiry-label">تاريخ الانتهاء 2</label>
+                        <input type="hidden" id="medExpiry2">
                     </div>
                     <div class="expiry-input-group">
-                        <input type="date" id="medExpiry3" class="form-input expiry-date">
+                        <div class="custom-date-picker" id="expiry3Picker">
+                            <input type="text" id="medExpiry3Display" placeholder="اختر التاريخ" readonly class="form-input expiry-date-input">
+                            <div class="date-picker-dropdown" id="expiry3Dropdown" style="display:none;"></div>
+                        </div>
                         <label class="expiry-label">تاريخ الانتهاء 3</label>
+                        <input type="hidden" id="medExpiry3">
                     </div>
                 </div>
                 <div class="form-row"><input type="text" id="medBarcode" placeholder="الباركود" class="form-input"><button type="button" class="small-btn" id="scanBarcodeBtn">📷 مسح باركود</button></div>
@@ -170,14 +183,20 @@
         </div>
     </div>
 
+    <!-- نافذة الترتيب المخصصة -->
+    <div id="customSortModal" class="modal small-modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeSortModal">✖</span>
+            <h3 id="sortModalTitle">ترتيب حسب</h3>
+            <div id="sortOptionsList" class="sort-options-list"></div>
+        </div>
+    </div>
+
     <!-- نافذة التحميل -->
     <div id="loadingOverlay" class="loading-overlay">
         <div class="loading-spinner"></div>
         <div id="loadingText" class="loading-text">جاري التحميل...</div>
     </div>
-
-    <!-- زر الرجوع الذكي -->
-    <button id="smartBackBtn" class="back-floating-btn" style="display: none;">← رجوع</button>
 
     <script src="app.js"></script>
     <script>
