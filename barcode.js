@@ -1,14 +1,4 @@
-/* =========================================================
-   PRODUCTION GRADE BARCODE SCANNER ENGINE
-   Native API → ZXing → Quagga fallback
-   Frame throttling, decode locking, duplicate prevention
-   COMPATIBLE WITH EXISTING app.js (same functions)
-   - startBarcodeScanner(targetInputId)
-   - startScannerForSearch()
-   - stopScannerAndClose()
-========================================================= */
-
-let currentScannerInstance = null;   // holds detector/reader/quagga
+let currentScannerInstance = null;
 let stream = null;
 let scanningActive = false;
 let decodeLock = false;
@@ -19,12 +9,12 @@ let lastScanTime = 0;
 let fallbackTimer = null;
 let visibilityPaused = false;
 
-let currentResultCallback = null;    // for search mode
-let currentTargetInputId = null;     // for form filling mode
+let currentTargetInputId = null;
 
-/* =========================
-   DUPLICATE FILTER
-========================= */
+// كشف نوع النظام
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+const isAndroid = /Android/.test(navigator.userAgent);
+
 function isDuplicate(code) {
     const now = Date.now();
     if (lastScannedCode === code && (now - lastScanTime) < 2000) return true;
@@ -33,9 +23,17 @@ function isDuplicate(code) {
     return false;
 }
 
-/* =========================
-   CAMERA INIT (REUSABLE)
-========================= */
+async function ensureCameraPermission() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(track => track.stop());
+        return true;
+    } catch (err) {
+        console.warn("Camera permission denied or error:", err);
+        return false;
+    }
+}
+
 async function startCamera(videoElement) {
     if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -52,16 +50,12 @@ async function startCamera(videoElement) {
     videoElement.srcObject = mediaStream;
     stream = mediaStream;
     await videoElement.play();
-    // wait until video is ready
     await new Promise(resolve => {
         if (videoElement.readyState >= 2) return resolve();
         videoElement.onloadedmetadata = () => resolve();
     });
 }
 
-/* =========================
-   STOP EVERYTHING (CLEAN)
-========================= */
 function stopScannerAndClose() {
     scanningActive = false;
     decodeLock = false;
@@ -85,13 +79,9 @@ function stopScannerAndClose() {
     if (video && video.srcObject) {
         video.srcObject = null;
     }
-    currentResultCallback = null;
     currentTargetInputId = null;
 }
 
-/* =========================
-   VISIBILITY CONTROL (PAUSE WHEN HIDDEN)
-========================= */
 document.addEventListener("visibilitychange", () => {
     visibilityPaused = document.hidden;
     if (visibilityPaused && stream) {
@@ -101,10 +91,8 @@ document.addEventListener("visibilitychange", () => {
     }
 });
 
-/* =========================================================
-   1. NATIVE BARCODE DETECTOR (BEST)
-========================================================= */
-async function tryNativeBarcode(videoElement, onSuccess) {
+// ------------------- ANDROID PATH -------------------
+async function androidBarcodeLoop(videoElement, onSuccess) {
     if (!("BarcodeDetector" in window)) return false;
     const formats = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e"];
     const detector = new BarcodeDetector({ formats });
@@ -113,11 +101,7 @@ async function tryNativeBarcode(videoElement, onSuccess) {
 
     const loop = async () => {
         if (!scanningActive) return;
-        if (decodeLock) {
-            requestAnimationFrame(loop);
-            return;
-        }
-        if (visibilityPaused) {
+        if (decodeLock || visibilityPaused) {
             requestAnimationFrame(loop);
             return;
         }
@@ -140,20 +124,6 @@ async function tryNativeBarcode(videoElement, onSuccess) {
     return true;
 }
 
-/* =========================================================
-   2. ZXING ENGINE (FALLBACK 1)
-========================================================= */
-function loadZXing() {
-    return new Promise((resolve, reject) => {
-        if (window.ZXing) return resolve(window.ZXing);
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@latest';
-        script.onload = () => resolve(window.ZXing);
-        script.onerror = reject;
-        document.head.appendChild(script);
-    });
-}
-
 async function startZXing(videoElement, onSuccess, resultDiv) {
     const ZXingLib = await loadZXing();
     const reader = new ZXingLib.BrowserMultiFormatReader();
@@ -161,7 +131,6 @@ async function startZXing(videoElement, onSuccess, resultDiv) {
     scanningActive = true;
     if (resultDiv) resultDiv.innerHTML = 'جاري مسح الباركود...';
 
-    // fallback to Quagga after 3 seconds if nothing detected
     fallbackTimer = setTimeout(() => {
         if (!scanningActive) return;
         switchToQuagga(videoElement, onSuccess, resultDiv);
@@ -182,15 +151,12 @@ async function startZXing(videoElement, onSuccess, resultDiv) {
     });
 }
 
-/* =========================================================
-   3. QUAGGA ENGINE (FALLBACK 2)
-========================================================= */
-function loadQuagga() {
+function loadZXing() {
     return new Promise((resolve, reject) => {
-        if (window.Quagga) return resolve(window.Quagga);
+        if (window.ZXing) return resolve(window.ZXing);
         const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js';
-        script.onload = () => resolve(window.Quagga);
+        script.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@latest';
+        script.onload = () => resolve(window.ZXing);
         script.onerror = reject;
         document.head.appendChild(script);
     });
@@ -199,7 +165,7 @@ function loadQuagga() {
 async function switchToQuagga(videoElement, onSuccess, resultDiv) {
     const Quagga = await loadQuagga();
     currentScannerInstance = Quagga;
-    if (resultDiv) resultDiv.innerHTML = 'جاري مسح الباركود (بطيء)...';
+    if (resultDiv) resultDiv.innerHTML = 'جاري مسح الباركود...';
 
     Quagga.init({
         inputStream: {
@@ -227,11 +193,25 @@ async function switchToQuagga(videoElement, onSuccess, resultDiv) {
     });
 }
 
-/* =========================================================
-   MAIN EXPOSED FUNCTION: fill input field
-   Used by: add/edit medicine forms
-========================================================= */
+function loadQuagga() {
+    return new Promise((resolve, reject) => {
+        if (window.Quagga) return resolve(window.Quagga);
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js';
+        script.onload = () => resolve(window.Quagga);
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+}
+
+// الدالة الرئيسية لبدء المسح (تختار المسار حسب النظام)
 async function startBarcodeScanner(targetInputId) {
+    const hasPerm = await ensureCameraPermission();
+    if (!hasPerm) {
+        alert("لا يمكن الوصول إلى الكاميرا. الرجاء منح الإذن في إعدادات الجهاز.");
+        return;
+    }
+    
     currentTargetInputId = targetInputId;
     const modal = document.getElementById('barcodeScannerModal');
     const video = document.getElementById('scannerVideo');
@@ -239,7 +219,7 @@ async function startBarcodeScanner(targetInputId) {
 
     if (!modal || !video) return;
 
-    stopScannerAndClose(); // ensure clean state
+    stopScannerAndClose();
     modal.style.display = 'flex';
     if (resultDiv) resultDiv.innerHTML = 'جاري تشغيل الكاميرا...';
 
@@ -250,13 +230,21 @@ async function startBarcodeScanner(targetInputId) {
         const onSuccess = (code) => {
             const input = document.getElementById(targetInputId);
             if (input) input.value = code;
-            // close modal already called inside stopScannerAndClose
         };
 
-        const nativeUsed = await tryNativeBarcode(video, onSuccess);
-        if (nativeUsed) return;
-
-        await startZXing(video, onSuccess, resultDiv);
+        if (isAndroid) {
+            const nativeUsed = await androidBarcodeLoop(video, onSuccess);
+            if (nativeUsed) return;
+            await startZXing(video, onSuccess, resultDiv);
+        } else if (isIOS) {
+            // iOS: تجنب BarcodeDetector لأنه غير موثوق، استخدم ZXing مباشرة
+            await startZXing(video, onSuccess, resultDiv);
+        } else {
+            // أنظمة أخرى: حاول Native أولاً
+            const nativeUsed = await androidBarcodeLoop(video, onSuccess);
+            if (nativeUsed) return;
+            await startZXing(video, onSuccess, resultDiv);
+        }
     } catch (err) {
         console.error('Barcode scanner error:', err);
         if (resultDiv) resultDiv.innerHTML = '❌ تعذر فتح الكاميرا. استخدم الإدخال اليدوي.';
@@ -265,11 +253,13 @@ async function startBarcodeScanner(targetInputId) {
     }
 }
 
-/* =========================================================
-   MAIN EXPOSED FUNCTION: search mode (find medicine)
-   Used by: home page barcode search button
-========================================================= */
 async function startScannerForSearch() {
+    const hasPerm = await ensureCameraPermission();
+    if (!hasPerm) {
+        alert("لا يمكن الوصول إلى الكاميرا. الرجاء منح الإذن في إعدادات الجهاز.");
+        return;
+    }
+    
     const modal = document.getElementById('barcodeScannerModal');
     const video = document.getElementById('scannerVideo');
     const resultDiv = document.getElementById('scannerResult');
@@ -285,7 +275,6 @@ async function startScannerForSearch() {
         if (resultDiv) resultDiv.innerHTML = 'الكاميرا جاهزة، انتظر مسح الباركود...';
 
         const onSuccess = async (code) => {
-            // search medicine by barcode
             if (typeof db !== 'undefined') {
                 const med = await db.meds.where('barcode').equals(code).first();
                 if (med && typeof window.showMedDetails === 'function') {
@@ -298,10 +287,17 @@ async function startScannerForSearch() {
             }
         };
 
-        const nativeUsed = await tryNativeBarcode(video, onSuccess);
-        if (nativeUsed) return;
-
-        await startZXing(video, onSuccess, resultDiv);
+        if (isAndroid) {
+            const nativeUsed = await androidBarcodeLoop(video, onSuccess);
+            if (nativeUsed) return;
+            await startZXing(video, onSuccess, resultDiv);
+        } else if (isIOS) {
+            await startZXing(video, onSuccess, resultDiv);
+        } else {
+            const nativeUsed = await androidBarcodeLoop(video, onSuccess);
+            if (nativeUsed) return;
+            await startZXing(video, onSuccess, resultDiv);
+        }
     } catch (err) {
         console.error('Barcode scanner error:', err);
         if (resultDiv) resultDiv.innerHTML = '❌ تعذر فتح الكاميرا.';
@@ -310,24 +306,47 @@ async function startScannerForSearch() {
     }
 }
 
-/* =========================================================
-   Additional helper: manual barcode entry (already exists in HTML)
-   We need to support the manual button in the modal.
-   The existing HTML has #manualBarcodeBtn. We'll attach event.
-========================================================= */
 document.addEventListener('DOMContentLoaded', () => {
-    const manualBtn = document.getElementById('manualBarcodeBtn');
-    if (manualBtn) {
-        manualBtn.addEventListener('click', () => {
+    const scanBarcodeBtn = document.getElementById('scanBarcodeBtn');
+    if (scanBarcodeBtn) {
+        scanBarcodeBtn.addEventListener('click', () => startBarcodeScanner('medBarcode'));
+        scanBarcodeBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startBarcodeScanner('medBarcode'); });
+    }
+    
+    const scanBarcodeGenBtn = document.getElementById('scanBarcodeGenBtn');
+    if (scanBarcodeGenBtn) {
+        scanBarcodeGenBtn.addEventListener('click', () => startBarcodeScanner('genBarcode'));
+        scanBarcodeGenBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startBarcodeScanner('genBarcode'); });
+    }
+    
+    const homeBarcodeBtn = document.getElementById('homeBarcodeBtn');
+    if (homeBarcodeBtn) {
+        homeBarcodeBtn.addEventListener('click', () => startScannerForSearch());
+        homeBarcodeBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startScannerForSearch(); });
+    }
+    
+    const barcodeSearchBtn = document.getElementById('barcodeSearchBtn');
+    if (barcodeSearchBtn) {
+        barcodeSearchBtn.addEventListener('click', () => startScannerForSearch());
+        barcodeSearchBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startScannerForSearch(); });
+    }
+    
+    const closeScannerModal = document.getElementById('closeScannerModal');
+    if (closeScannerModal) closeScannerModal.addEventListener('click', stopScannerAndClose);
+    
+    const cancelScannerBtn = document.getElementById('cancelScannerBtn');
+    if (cancelScannerBtn) cancelScannerBtn.addEventListener('click', stopScannerAndClose);
+    
+    const manualBarcodeBtn = document.getElementById('manualBarcodeBtn');
+    if (manualBarcodeBtn) {
+        manualBarcodeBtn.addEventListener('click', () => {
             const barcode = prompt('أدخل الباركود يدويًا:');
             if (barcode && barcode.trim()) {
-                // determine which mode we are in: form fill or search
                 if (currentTargetInputId) {
                     const input = document.getElementById(currentTargetInputId);
                     if (input) input.value = barcode.trim();
                     stopScannerAndClose();
                 } else {
-                    // search mode
                     stopScannerAndClose();
                     if (typeof db !== 'undefined') {
                         db.meds.where('barcode').equals(barcode.trim()).first().then(med => {
@@ -344,15 +363,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-
-    // attach close buttons (they already exist in HTML, but ensure they call stop)
-    const closeScannerModal = document.getElementById('closeScannerModal');
-    if (closeScannerModal) closeScannerModal.addEventListener('click', stopScannerAndClose);
-    const cancelScannerBtn = document.getElementById('cancelScannerBtn');
-    if (cancelScannerBtn) cancelScannerBtn.addEventListener('click', stopScannerAndClose);
 });
 
-// Export global functions exactly as expected by app.js
 window.startBarcodeScanner = startBarcodeScanner;
 window.startScannerForSearch = startScannerForSearch;
 window.stopScannerAndClose = stopScannerAndClose;
