@@ -192,6 +192,19 @@
         </div>
     </div>
 
+    <!-- مودال إدخال التاريخ المخصص (بديل الـ prompt) -->
+    <div id="expiryPromptModal" class="modal small-modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeExpiryPromptModal">✖</span>
+            <h3 id="expiryPromptTitle">أدخل تاريخ الانتهاء</h3>
+            <input type="date" id="expiryPromptInput" class="form-input" style="margin: 16px 0;">
+            <div style="display: flex; gap: 12px; justify-content: center;">
+                <button id="confirmExpiryBtn" class="save-btn">تأكيد</button>
+                <button id="cancelExpiryBtn" class="cancel-btn">إلغاء</button>
+            </div>
+        </div>
+    </div>
+
     <!-- نافذة التحميل -->
     <div id="loadingOverlay" class="loading-overlay">
         <div class="loading-spinner"></div>
