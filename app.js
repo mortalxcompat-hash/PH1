@@ -152,6 +152,13 @@ let currentCompaniesSearchTerm = '';
 let currentCompaniesSortType = 'alpha';
 let previousSearchQuery = '';
 
+// متغيرات لنافذة إدخال التاريخ المخصصة
+let pendingExpiryCallback = null;
+let pendingBatchMedicines = null;
+let currentBatchIndex = 0;
+let batchAddedCount = 0;
+let batchDuplicateCount = 0;
+
 function t(key, ...args) {
     let text = translations[currentLang][key] || key;
     if (args.length) {
@@ -304,6 +311,7 @@ async function removeDuplicateMedicines() {
 
 async function initDemoData() {
     try {
+        await db.open();
         const count = await db.meds.count();
         if (count === 0) {
             const now = new Date();
@@ -728,48 +736,119 @@ async function batchDelete() {
     } 
 }
 
-async function batchAddToPharmacy() { 
-    if(selectedMeds.size===0) return; 
-    const medicines = []; 
-    for(let id of selectedMeds){ 
-        const med = await db.meds.get(id); 
-        if(med) medicines.push(med); 
-    } 
-    if(!medicines.length) return; 
-    showLoading('جاري إضافة الأدوية إلى الصيدلية...'); 
-    let added=0; 
-    let duplicates=0;
-    for(let med of medicines){ 
-        const newExpiry = prompt(t('please_enter_expiry')+med.name, new Date(Date.now()+30*86400000).toISOString().split('T')[0]); 
-        if(!newExpiry) continue; 
-        const newMed = { 
-            name:med.name, expiry:newExpiry, scientificName:med.scientificName||'', company:med.company||'', 
-            origin:med.origin||'', type:MED_TYPES.PHARMACY, category:med.category||'', 
-            barcode:med.barcode||'', image:med.image||null, dosageForm:med.dosageForm||'', 
-            dosage:med.dosage||'', createdAt:new Date().toISOString() 
+// دالة فتح مودال إدخال التاريخ المخصصة
+function openExpiryPrompt(defaultDate, callback) {
+    const modal = document.getElementById('expiryPromptModal');
+    const input = document.getElementById('expiryPromptInput');
+    const confirmBtn = document.getElementById('confirmExpiryBtn');
+    const cancelBtn = document.getElementById('cancelExpiryBtn');
+    const closeBtn = document.getElementById('closeExpiryPromptModal');
+    if (!modal || !input) return;
+
+    if (!defaultDate) {
+        const def = new Date();
+        def.setDate(def.getDate() + 30);
+        defaultDate = def.toISOString().split('T')[0];
+    }
+    input.value = defaultDate;
+    modal.style.display = 'flex';
+    input.focus();
+
+    const cleanup = () => {
+        confirmBtn.removeEventListener('click', onClick);
+        cancelBtn.removeEventListener('click', onCancel);
+        closeBtn.removeEventListener('click', onCancel);
+        modal.style.display = 'none';
+        pendingExpiryCallback = null;
+    };
+
+    const onClick = () => {
+        const value = input.value;
+        if (value && value !== '9999-12-31') {
+            cleanup();
+            callback(value);
+        } else {
+            alert('الرجاء إدخال تاريخ انتهاء صحيح');
+        }
+    };
+    const onCancel = () => {
+        cleanup();
+        callback(null);
+    };
+
+    confirmBtn.addEventListener('click', onClick);
+    cancelBtn.addEventListener('click', onCancel);
+    closeBtn.addEventListener('click', onCancel);
+}
+
+// تعديل دالة addToPharmacy لاستخدام المودال المخصص
+async function addToPharmacy(originalMed) {
+    openExpiryPrompt(null, async (newExpiry) => {
+        if (!newExpiry) return;
+        const newMed = {
+            name: originalMed.name, expiry: newExpiry, scientificName: originalMed.scientificName || '',
+            company: originalMed.company || '', origin: originalMed.origin || '', type: MED_TYPES.PHARMACY,
+            category: originalMed.category || '', barcode: originalMed.barcode || '',
+            image: originalMed.image || null, dosageForm: originalMed.dosageForm || '',
+            dosage: originalMed.dosage || '', createdAt: new Date().toISOString()
         };
         const duplicate = await isDuplicateMedicine(newMed);
-        if (duplicate) { duplicates++; continue; }
-        await db.meds.add(newMed); 
-        added++; 
-        await addMedicineToGeneralIfNotExists(newMed); 
-    } 
-    hideLoading(); 
-    if(added>0){ 
-        const toast = document.createElement('div'); 
-        toast.className='offline-toast'; 
-        let msg = t('batch_add_success')+` (${added})`;
-        if(duplicates>0) msg += `، تم تخطي ${duplicates} دواء مكرر`;
-        toast.innerText = msg; 
-        document.body.appendChild(toast); 
-        setTimeout(()=>toast.remove(),3000); 
-        if(currentPage==='all') renderAllMedicines(); 
-        else if(currentPage==='pharmacy') renderPharmacyMedicines(); 
-    } else if(duplicates>0) {
-        alert(`لم يتم إضافة أي دواء. جميع الأدوية (${duplicates}) مكررة بالفعل في الصيدلية.`);
-    } else {
-        alert('لم يتم إضافة أي دواء');
+        if (duplicate) {
+            alert(currentLang === 'ar' ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل في الصيدلية: ${duplicate.name}` : `Duplicate: ${duplicate.name}`);
+            return;
+        }
+        await db.meds.add(newMed);
+        await addMedicineToGeneralIfNotExists(newMed);
+        const toast = document.createElement('div'); toast.className = 'offline-toast';
+        toast.innerText = t('added_to_pharmacy'); document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2000);
+        if (currentPage === 'pharmacy') renderPharmacyMedicines();
+        else if (currentPage === 'all') renderAllMedicines();
+    });
+}
+
+// تعديل دالة batchAddToPharmacy لاستخدام المودال المخصص مع التسلسل
+async function batchAddToPharmacy() {
+    if (selectedMeds.size === 0) return;
+    const medicines = [];
+    for (let id of selectedMeds) {
+        const med = await db.meds.get(id);
+        if (med) medicines.push(med);
     }
+    if (!medicines.length) return;
+    pendingBatchMedicines = medicines;
+    currentBatchIndex = 0;
+    batchAddedCount = 0;
+    batchDuplicateCount = 0;
+    processNextBatchMedicine();
+}
+
+function processNextBatchMedicine() {
+    if (currentBatchIndex >= pendingBatchMedicines.length) {
+        const msg = t('batch_add_success') + ` (${batchAddedCount})` + (batchDuplicateCount ? `، تم تخطي ${batchDuplicateCount} مكرر` : '');
+        alert(msg);
+        if (currentPage === 'all') renderAllMedicines();
+        else if (currentPage === 'pharmacy') renderPharmacyMedicines();
+        pendingBatchMedicines = null;
+        return;
+    }
+    const med = pendingBatchMedicines[currentBatchIndex];
+    openExpiryPrompt(null, async (newExpiry) => {
+        if (newExpiry) {
+            const newMed = { ...med, expiry: newExpiry, type: MED_TYPES.PHARMACY, createdAt: new Date().toISOString() };
+            delete newMed.id;
+            const duplicate = await isDuplicateMedicine(newMed);
+            if (duplicate) {
+                batchDuplicateCount++;
+            } else {
+                await db.meds.add(newMed);
+                await addMedicineToGeneralIfNotExists(newMed);
+                batchAddedCount++;
+            }
+        }
+        currentBatchIndex++;
+        processNextBatchMedicine();
+    });
 }
 
 function openCustomSortModal(sortType, onSelectCallback) {
@@ -1853,24 +1932,6 @@ async function showMedDetails(med) {
     openModal('medModal');
 }
 
-async function addToPharmacy(originalMed) {
-    const newExpiry = prompt(t('add_expiry'), new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0]);
-    if (!newExpiry) return;
-    if (newExpiry === '9999-12-31') { alert('الرجاء إدخال تاريخ انتهاء صحيح'); return; }
-    const newMed = {
-        name: originalMed.name, expiry: newExpiry, scientificName: originalMed.scientificName || '', company: originalMed.company || '',
-        origin: originalMed.origin || '', type: MED_TYPES.PHARMACY, category: originalMed.category || '',
-        barcode: originalMed.barcode || '', image: originalMed.image || null, dosageForm: originalMed.dosageForm || '',
-        dosage: originalMed.dosage || '', createdAt: new Date().toISOString()
-    };
-    const duplicate = await isDuplicateMedicine(newMed);
-    if (duplicate) { alert(currentLang === 'ar' ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل في الصيدلية: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})` : `Cannot add. Duplicate medicine exists in pharmacy: ${duplicate.name} (Expiry: ${duplicate.expiry})`); return; }
-    await db.meds.add(newMed);
-    await addMedicineToGeneralIfNotExists(newMed);
-    const toast = document.createElement('div'); toast.className = 'offline-toast'; toast.innerText = t('added_to_pharmacy'); document.body.appendChild(toast); setTimeout(() => toast.remove(), 2000);
-    if (currentPage === 'pharmacy') renderPharmacyMedicines(); else if (currentPage === 'all') renderAllMedicines();
-}
-
 function showFirstTimeGuidance() {
     if (!localStorage.getItem('firstVisit')) { setTimeout(() => { const toast = document.createElement('div'); toast.className = 'offline-toast'; toast.style.backgroundColor = 'var(--primary)'; toast.innerText = t('long_press_guide'); document.body.appendChild(toast); setTimeout(() => toast.remove(), 5000); localStorage.setItem('firstVisit', 'true'); }, 1000); }
 }
@@ -1879,15 +1940,55 @@ function changeLanguage(lang) { currentLang = lang; localStorage.setItem('appLan
 function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('darkMode', document.body.classList.contains('dark')); if (currentPage === 'home') updateBarChart(); const savedColor = localStorage.getItem('appColor'); if (savedColor) { try { const color = JSON.parse(savedColor); applyAppColor(color); } catch(e) { console.error(e); } } }
 function clearSearchHistory(pageKey) { recentSearches[pageKey] = []; localStorage.setItem(`recentSearches_${pageKey}`, '[]'); if (pageKey === 'all' && currentPage === 'all') renderAllMedicines(); else if (pageKey === 'pharmacy' && currentPage === 'pharmacy') renderPharmacyMedicines(); else if (pageKey === 'companies' && currentPage === 'companies') renderCompaniesPage(); else if (pageKey === 'expiring' && currentPage === 'expiring') renderExpiringSoonPage(); }
 function setupModalBackdropClose() { document.querySelectorAll('.modal').forEach(modal => { modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; }); }); }
+
+// تعديل دالة handleBackButton لمنع الخروج التلقائي
 window.handleBackButton = function () {
-    if (currentPage === 'home') { showExitConfirmation(); return; }
-    if (isInEditMode && currentMed) { showSaveChangesModal(async () => { await saveMedFromForm(); isInEditMode = false; currentMed = null; switchPage('home'); }, () => { isInEditMode = false; currentMed = null; closeMedFormModal(); switchPage('home'); }); return; }
-    if (currentCompany !== null) { currentCompany = null; renderCompaniesPage(); return; }
-    if (searchQuery !== '' && searchQuery.trim() !== '') { if (clearSearch()) return; }
-    if (pageHistoryStack.length > 0) { const prev = pageHistoryStack.pop(); switchPage(prev); } else { switchPage('home'); }
+    if (currentPage === 'home') {
+        if (isInEditMode || searchQuery) {
+            if (isInEditMode) {
+                showSaveChangesModal(
+                    async () => { await saveMedFromForm(); isInEditMode = false; currentMed = null; },
+                    () => { isInEditMode = false; currentMed = null; closeMedFormModal(); }
+                );
+            } else if (searchQuery) {
+                clearSearch();
+            }
+        } else {
+            showExitConfirmation();
+        }
+        return;
+    }
+
+    if (isInEditMode && currentMed) {
+        showSaveChangesModal(
+            async () => { await saveMedFromForm(); isInEditMode = false; currentMed = null; switchPage('home'); },
+            () => { isInEditMode = false; currentMed = null; closeMedFormModal(); switchPage('home'); }
+        );
+        return;
+    }
+
+    if (currentCompany !== null) {
+        currentCompany = null;
+        renderCompaniesPage();
+        return;
+    }
+
+    if (searchQuery !== '') {
+        clearSearch();
+        return;
+    }
+
+    if (pageHistoryStack.length > 0) {
+        const prev = pageHistoryStack.pop();
+        switchPage(prev);
+    } else {
+        switchPage('home');
+    }
 };
+
 function closeSortModal() { closeModal('customSortModal'); }
 document.getElementById('closeSortModal')?.addEventListener('click', closeSortModal);
+
 window.goHome = goHome;
 window.switchPage = switchPage;
 window.openSettingsModal = openSettingsModal;
@@ -1926,14 +2027,18 @@ window.toggleSelectCompany = toggleSelectCompany;
 window.toggleSelectCategory = toggleSelectCategory;
 window.batchRenameCompanies = batchRenameCompanies;
 window.batchRenameCategories = batchRenameCategories;
+
 setTimeout(() => { hideLoading(); }, 4000);
 window.addEventListener('error', () => hideLoading());
 window.addEventListener('unhandledrejection', () => hideLoading());
+
 const confirmExitBtn = document.getElementById('confirmExitBtn');
 const cancelExitBtn = document.getElementById('cancelExitBtn');
 if (confirmExitBtn) confirmExitBtn.addEventListener('click', () => { hideExitConfirmation(); if (window.close) window.close(); else alert('لا يمكن إغلاق المتصفح برمجياً'); });
 if (cancelExitBtn) cancelExitBtn.addEventListener('click', hideExitConfirmation);
+
 window.addEventListener('popstate', (event) => { event.preventDefault(); window.handleBackButton(); });
+
 document.addEventListener('DOMContentLoaded', async () => {
     await initDemoData();
     if (localStorage.getItem('darkMode') === 'true') document.body.classList.add('dark');
@@ -1942,6 +2047,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.body.dir = 'rtl';
     updateAllText();
     if (Notification.permission !== 'granted' && Notification.permission !== 'denied') Notification.requestPermission();
+
     const notifBtn = document.getElementById('notifBtn');
     const settingsBtn = document.getElementById('settingsHeaderBtn');
     const headerBackBtn = document.getElementById('headerBackBtn');
@@ -1950,6 +2056,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const barcodeSearchBtn = document.getElementById('barcodeSearchBtn');
     const scanBarcodeBtn = document.getElementById('scanBarcodeBtn');
     const scanBarcodeGenBtn = document.getElementById('scanBarcodeGenBtn');
+
     function addClickAndTouch(element, handler) { if (!element) return; element.addEventListener('click', handler); element.addEventListener('touchstart', (e) => { e.preventDefault(); handler(); }); }
     addClickAndTouch(notifBtn, () => switchPage('inbox'));
     addClickAndTouch(settingsBtn, () => openSettingsModal());
@@ -1959,6 +2066,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     addClickAndTouch(barcodeSearchBtn, () => window.startScannerForSearch());
     addClickAndTouch(scanBarcodeBtn, () => startBarcodeScanner('medBarcode'));
     addClickAndTouch(scanBarcodeGenBtn, () => startBarcodeScanner('genBarcode'));
+
     const submitMed = document.getElementById('submitMedBtn');
     if (submitMed) submitMed.onclick = saveMedFromForm;
     const medImage = document.getElementById('medImage');
@@ -1967,6 +2075,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (submitGeneral) submitGeneral.onclick = saveGeneralMedFromForm;
     const genImage = document.getElementById('genImage');
     if (genImage) genImage.onchange = function (e) { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (ev) => { document.getElementById('genImagePreview').innerHTML = `<img src="${ev.target.result}" style="max-width:100%; max-height:100%;">`; }; reader.readAsDataURL(file); } };
+
     document.getElementById('closeMedModal')?.addEventListener('click', () => closeModal('medModal'));
     document.getElementById('closeMedFormModal')?.addEventListener('click', closeMedFormModal);
     document.getElementById('closeGeneralFormModal')?.addEventListener('click', closeGeneralFormModal);
@@ -1980,12 +2089,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('closeColorModal')?.addEventListener('click', () => closeModal('colorModal'));
     document.getElementById('closeExitModal')?.addEventListener('click', () => closeModal('exitConfirmModal'));
     document.getElementById('closeSaveChangesModal')?.addEventListener('click', () => closeModal('saveChangesModal'));
+    document.getElementById('closeExpiryPromptModal')?.addEventListener('click', () => closeModal('expiryPromptModal'));
+
     setupModalBackdropClose();
     updateCategoriesDatalist('medCategoriesList');
     updateCategoriesDatalist('genCategoriesList');
     detectIOSDevice();
     testDeviceCompatibility();
     initCustomDatePickers();
+
     history.pushState({ page: currentPage }, '');
     switchPage('home');
     checkAndSendExpiryNotifications();
