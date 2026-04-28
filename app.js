@@ -7,7 +7,7 @@ if (typeof Dexie === 'undefined') {
 const db = new Dexie('PharmacyDB');
 db.version(2).stores({
     meds: '++id, name, expiry, type, category, company, scientificName, origin, image, barcode, dosageForm, dosage, createdAt',
-    deletedMeds: '++id, name, expiry, type, category, company, scientificName, origin, image, barcode, dosageForm, dosage, createdAt',
+    deletedMeds: '++id, name, expiry, type, category, company, scientificName, origin, image, barcode, dosageForm, dosage, createdAt, deletedFromPage, deletedAt',
     notifications: '++id, message, date, read',
     notificationLog: '++id, medId, lastNotified, count'
 });
@@ -232,6 +232,37 @@ function showColorModal() {
     openModal('colorModal');
 }
 
+function detectIOSDevice() {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isIOS) {
+        setTimeout(() => {
+            const toast = document.createElement('div');
+            toast.className = 'ios-toast-message';
+            toast.innerHTML = '🍏 لتجربة أفضل على أجهزة Apple، قم بإضافة التطبيق إلى الشاشة الرئيسية';
+            toast.style.cssText = 'position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--primary); color:white; padding:10px 20px; border-radius:50px; font-size:12px; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.2); white-space:nowrap;';
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        }, 1000);
+    }
+}
+
+function testDeviceCompatibility() {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isAndroid = /Android/.test(navigator.userAgent);
+    console.log(`الجهاز: ${isIOS ? 'iOS' : isAndroid ? 'Android' : 'أخرى'}`);
+    const features = {
+        'IndexedDB': !!window.indexedDB,
+        'Service Worker': 'serviceWorker' in navigator,
+        'BarcodeDetector': 'BarcodeDetector' in window,
+        'Notification': 'Notification' in window,
+        'Camera': !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+    };
+    console.log('ميزات مدعومة:', features);
+    if (!features.BarcodeDetector && isIOS) {
+        console.warn('BarcodeDetector غير مدعوم على هذا الإصدار من iOS، سيتم استخدام ZXing كبديل');
+    }
+}
+
 async function migrateData() {
     const meds = await db.meds.toArray();
     for (let med of meds) {
@@ -246,6 +277,28 @@ async function migrateData() {
         if (!med.createdAt) { med.createdAt = new Date().toISOString(); changed = true; }
         if (!med.type) { med.type = MED_TYPES.GENERAL; changed = true; }
         if (changed) await db.deletedMeds.update(med.id, { createdAt: med.createdAt, type: med.type });
+    }
+}
+
+async function removeDuplicateMedicines() {
+    const allMeds = await db.meds.toArray();
+    const uniqueMap = new Map();
+    const duplicatesToDelete = [];
+    for (const med of allMeds) {
+        const key = `${med.name}|${med.scientificName || ''}|${med.company || ''}|${med.dosageForm || ''}|${med.dosage || ''}`;
+        if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, med);
+        } else {
+            duplicatesToDelete.push(med.id);
+        }
+    }
+    for (const id of duplicatesToDelete) {
+        await db.meds.delete(id);
+    }
+    if (duplicatesToDelete.length > 0) {
+        console.log(`تم حذف ${duplicatesToDelete.length} دواء مكرر`);
+        if (currentPage === 'all') renderAllMedicines();
+        else if (currentPage === 'pharmacy') renderPharmacyMedicines();
     }
 }
 
@@ -265,6 +318,7 @@ async function initDemoData() {
             await db.meds.bulkAdd([...generalMeds, ...pharmacyMeds]);
         }
         await migrateData();
+        await removeDuplicateMedicines();
     } catch (err) { console.error(err); } finally { hideLoading(); }
 }
 
@@ -272,10 +326,8 @@ async function isDuplicateMedicine(medData, excludeId = null) {
     try {
         let query = db.meds.where('name').equals(medData.name);
         const existingMeds = await query.toArray();
-        
         for (let existing of existingMeds) {
             if (excludeId && existing.id === excludeId) continue;
-            
             const isDuplicate = (
                 existing.name === medData.name &&
                 (existing.scientificName || '') === (medData.scientificName || '') &&
@@ -288,16 +340,10 @@ async function isDuplicateMedicine(medData, excludeId = null) {
                 (existing.barcode || '') === (medData.barcode || '') &&
                 (existing.expiry || '') === (medData.expiry || '')
             );
-            
-            if (isDuplicate) {
-                return existing;
-            }
+            if (isDuplicate) return existing;
         }
         return null;
-    } catch (err) {
-        console.error('Error checking duplicate:', err);
-        return null;
-    }
+    } catch (err) { console.error('Error checking duplicate:', err); return null; }
 }
 
 async function addMedicineToGeneralIfNotExists(medData) {
@@ -309,7 +355,6 @@ async function addMedicineToGeneralIfNotExists(medData) {
                       (m.dosageForm || '') === (medData.dosageForm || '') &&
                       (m.dosage || '') === (medData.dosage || ''))
             .first();
-            
         if (!existingGeneral) {
             const generalMed = {
                 name: medData.name,
@@ -325,23 +370,16 @@ async function addMedicineToGeneralIfNotExists(medData) {
                 expiry: '9999-12-31',
                 createdAt: new Date().toISOString()
             };
-            
             const duplicateGeneral = await isDuplicateMedicine(generalMed);
-            if (!duplicateGeneral) {
-                await db.meds.add(generalMed);
-            }
+            if (!duplicateGeneral) await db.meds.add(generalMed);
         }
-    } catch (err) {
-        console.error('Error adding to general medicines:', err);
-    }
+    } catch (err) { console.error('Error adding to general medicines:', err); }
 }
 
 function goHome() {
     if (currentPage === 'home') showExitConfirmation();
     else {
-        if (searchQuery !== '') {
-            searchQuery = '';
-        }
+        if (searchQuery !== '') searchQuery = '';
         switchPage('home');
     }
 }
@@ -403,16 +441,16 @@ function updateAllText() {
     const titleDiv = document.getElementById('appTitle');
     if (titleDiv) titleDiv.innerHTML = t(titleKey);
     
-    const smartBackBtn = document.getElementById('smartBackBtn');
     const settingsBtn = document.getElementById('settingsHeaderBtn');
     const notifBtn = document.getElementById('notifBtn');
+    const headerBackBtn = document.getElementById('headerBackBtn');
     
     if (currentPage === 'home') {
-        if (smartBackBtn) smartBackBtn.style.display = 'none';
+        if (headerBackBtn) headerBackBtn.style.display = 'none';
         if (settingsBtn) settingsBtn.style.display = 'flex';
         if (notifBtn) notifBtn.style.display = 'flex';
     } else {
-        if (smartBackBtn) smartBackBtn.style.display = 'flex';
+        if (headerBackBtn) headerBackBtn.style.display = 'flex';
         if (settingsBtn) settingsBtn.style.display = 'none';
         if (notifBtn) notifBtn.style.display = 'none';
     }
@@ -515,12 +553,16 @@ function renderMedications(list, showDeleteButton = true) {
         const card = document.createElement('div');
         card.className = `med-card ${isSelected ? 'selected' : ''} ${selectionMode ? 'selection-mode' : ''}`;
         card.setAttribute('data-id', med.id);
-        card.innerHTML = `<div class="med-info"><div class="checkbox"></div>${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div>`;
+        let expiryHtml = '';
+        if (med.type === MED_TYPES.PHARMACY && med.expiry && med.expiry !== '9999-12-31') {
+            expiryHtml = `<div class="med-expiry">📅 ${med.expiry}</div>`;
+        }
+        card.innerHTML = `<div class="med-info"><div class="checkbox"></div>${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div>${expiryHtml}</div></div>`;
         if (showDeleteButton) {
             const delBtn = document.createElement('button');
             delBtn.className = 'delete-button';
             delBtn.innerHTML = `<div class="trash-bin-icon"><div class="bin-lid"></div><div class="bin-container"><div class="bin-line"></div><div class="bin-line"></div></div></div>`;
-            delBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(t('delete_confirm'))) moveToDeleted(med.id); });
+            delBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(t('delete_confirm'))) moveToDeleted(med.id, currentPage); });
             card.appendChild(delBtn);
         }
         card.addEventListener('click', (e) => { if (selectionMode) { e.stopPropagation(); toggleSelectMed(med.id); } else showMedDetails(med); });
@@ -560,27 +602,65 @@ function renderPaginationControls() {
 function goToPage(page) { currentPageNumber = page; renderMedicationsWithPagination(currentFilteredList, true); window.scrollTo({top:0,behavior:'smooth'}); }
 async function refreshWithPagination(list, showDeleteButton = true) { currentPageNumber = 1; await renderMedicationsWithPagination(list, showDeleteButton); }
 
-async function moveToDeleted(medId) {
+async function moveToDeleted(medId, sourcePage = currentPage) {
     const med = await db.meds.get(medId);
-    if (med) { await db.deletedMeds.add(med); await db.meds.delete(medId); selectedMeds.delete(medId); if (currentPage==='all') renderAllMedicines(); else if (currentPage==='pharmacy') renderPharmacyMedicines(); else if (currentPage==='expiring') renderExpiringSoonPage(); updateBarChart(); }
+    if (med) { 
+        await db.deletedMeds.add({
+            ...med,
+            deletedFromPage: sourcePage,
+            deletedAt: new Date().toISOString()
+        }); 
+        await db.meds.delete(medId); 
+        selectedMeds.delete(medId); 
+        if (sourcePage === 'all') renderAllMedicines(); 
+        else if (sourcePage === 'pharmacy') renderPharmacyMedicines(); 
+        else if (sourcePage === 'expiring') renderExpiringSoonPage(); 
+        updateBarChart(); 
+    }
 }
-async function restoreFromDeleted(medId) { const med = await db.deletedMeds.get(medId); if(med){ await db.meds.add(med); await db.deletedMeds.delete(medId); renderDeletedItems(); } }
-async function permanentlyDelete(medId) { if(confirm(t('delete_permanently_confirm'))){ await db.deletedMeds.delete(medId); renderDeletedItems(); } }
-async function emptyTrash() { if(confirm(t('empty_trash_confirm'))){ await db.deletedMeds.clear(); renderDeletedItems(); } }
+
+async function restoreFromDeleted(medId, sourcePage) {
+    const med = await db.deletedMeds.get(medId); 
+    if(med){ 
+        delete med.deletedFromPage;
+        delete med.deletedAt;
+        await db.meds.add(med); 
+        await db.deletedMeds.delete(medId); 
+        if (sourcePage === 'all') renderAllMedicines();
+        else if (sourcePage === 'pharmacy') renderPharmacyMedicines();
+        else renderDeletedItems();
+    } 
+}
+
+async function permanentlyDelete(medId, sourcePage) { 
+    if(confirm(t('delete_permanently_confirm'))){ 
+        await db.deletedMeds.delete(medId); 
+        renderDeletedItems();
+    } 
+}
+
+async function emptyTrash(sourcePage) { 
+    if(confirm(t('empty_trash_confirm'))){ 
+        await db.deletedMeds.where('deletedFromPage').equals(sourcePage).delete();
+        renderDeletedItems();
+    } 
+}
 
 async function renderDeletedItems() {
-    const list = await db.deletedMeds.toArray();
+    const currentPageSource = currentPage === 'deleted' ? 'all' : currentPage;
+    let list = await db.deletedMeds.toArray();
+    list = list.filter(item => item.deletedFromPage === currentPageSource);
     const container = document.getElementById('pageContent');
     container.innerHTML = `<div class="filters-bar"><button id="emptyTrashBtn" class="empty-trash-btn">🗑️ ${t('empty_trash')}</button></div><div class="content-list" id="contentList"></div>`;
-    document.getElementById('emptyTrashBtn')?.addEventListener('click', emptyTrash);
+    document.getElementById('emptyTrashBtn')?.addEventListener('click', () => emptyTrash(currentPageSource));
     const listDiv = document.getElementById('contentList');
     if (!list.length) { listDiv.innerHTML = `<div class="empty-state">${t('no_meds')}</div>`; return; }
     list.forEach(med => {
         const thumb = med.image ? `<img src="${med.image}" class="med-image-thumb">` : '<div class="med-image-thumb">💊</div>';
         const card = document.createElement('div'); card.className = 'med-card';
-        card.innerHTML = `<div class="med-info">${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div><div style="display:flex; gap:8px;"><button class="restore-btn small-btn" data-id="${med.id}">استعادة</button><button class="delete-permanently-btn small-btn" style="background:var(--danger);" data-id="${med.id}">🗑️ حذف نهائي</button></div>`;
-        card.querySelector('.restore-btn')?.addEventListener('click',(e)=>{e.stopPropagation(); restoreFromDeleted(med.id);});
-        card.querySelector('.delete-permanently-btn')?.addEventListener('click',(e)=>{e.stopPropagation(); permanentlyDelete(med.id);});
+        card.innerHTML = `<div class="med-info">${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div><div style="display:flex; gap:8px;"><button class="restore-btn small-btn" data-id="${med.id}">استعادة</button><button class="delete-permanently-btn small-btn" style="background:var(--danger);" data-id="${med.id}">حذف نهائي</button></div>`;
+        card.querySelector('.restore-btn')?.addEventListener('click',(e)=>{e.stopPropagation(); restoreFromDeleted(med.id, currentPageSource);});
+        card.querySelector('.delete-permanently-btn')?.addEventListener('click',(e)=>{e.stopPropagation(); permanentlyDelete(med.id, currentPageSource);});
         listDiv.appendChild(card);
     });
 }
@@ -621,7 +701,33 @@ function updateSelectionButtons() {
 }
 function selectAllMeds() { document.querySelectorAll('.med-card').forEach(card => { const id = parseInt(card.getAttribute('data-id')); if (!selectedMeds.has(id)) toggleSelectMed(id); }); }
 function deselectAllMeds() { document.querySelectorAll('.med-card').forEach(card => { const id = parseInt(card.getAttribute('data-id')); if (selectedMeds.has(id)) toggleSelectMed(id); }); }
-async function batchDelete() { if(selectedMeds.size===0) return alert(t('batch_delete_confirm',0)); if(confirm(t('batch_delete_confirm',selectedMeds.size))){ showLoading('جاري حذف الأدوية...'); try{ for(let id of selectedMeds){ const med = await db.meds.get(id); if(med) await db.deletedMeds.add(med); await db.meds.delete(id); } selectedMeds.clear(); selectionMode=false; document.querySelectorAll('.med-card .checkbox').forEach(cb=>cb.style.display='none'); if(currentPage==='all') renderAllMedicines(); else if(currentPage==='pharmacy') renderPharmacyMedicines(); updateBarChart(); }finally{ hideLoading(); } } }
+
+async function batchDelete() { 
+    if(selectedMeds.size===0) return alert(t('batch_delete_confirm',0)); 
+    if(confirm(t('batch_delete_confirm',selectedMeds.size))){ 
+        showLoading('جاري حذف الأدوية...'); 
+        try{ 
+            for(let id of selectedMeds){ 
+                const med = await db.meds.get(id); 
+                if(med) await db.deletedMeds.add({
+                    ...med,
+                    deletedFromPage: currentPage,
+                    deletedAt: new Date().toISOString()
+                }); 
+                await db.meds.delete(id); 
+            } 
+            selectedMeds.clear(); 
+            selectionMode=false; 
+            document.querySelectorAll('.med-card .checkbox').forEach(cb=>cb.style.display='none'); 
+            if(currentPage==='all') renderAllMedicines(); 
+            else if(currentPage==='pharmacy') renderPharmacyMedicines(); 
+            updateBarChart(); 
+        }finally{ 
+            hideLoading(); 
+        } 
+    } 
+}
+
 async function batchAddToPharmacy() { 
     if(selectedMeds.size===0) return; 
     const medicines = []; 
@@ -636,20 +742,14 @@ async function batchAddToPharmacy() {
     for(let med of medicines){ 
         const newExpiry = prompt(t('please_enter_expiry')+med.name, new Date(Date.now()+30*86400000).toISOString().split('T')[0]); 
         if(!newExpiry) continue; 
-        
         const newMed = { 
             name:med.name, expiry:newExpiry, scientificName:med.scientificName||'', company:med.company||'', 
             origin:med.origin||'', type:MED_TYPES.PHARMACY, category:med.category||'', 
             barcode:med.barcode||'', image:med.image||null, dosageForm:med.dosageForm||'', 
             dosage:med.dosage||'', createdAt:new Date().toISOString() 
         };
-        
         const duplicate = await isDuplicateMedicine(newMed);
-        if (duplicate) {
-            duplicates++;
-            continue;
-        }
-        
+        if (duplicate) { duplicates++; continue; }
         await db.meds.add(newMed); 
         added++; 
         await addMedicineToGeneralIfNotExists(newMed); 
@@ -670,6 +770,41 @@ async function batchAddToPharmacy() {
     } else {
         alert('لم يتم إضافة أي دواء');
     }
+}
+
+function openCustomSortModal(sortType, onSelectCallback) {
+    const modal = document.getElementById('customSortModal');
+    const optionsList = document.getElementById('sortOptionsList');
+    const title = document.getElementById('sortModalTitle');
+    if (!modal || !optionsList) return;
+    let options = [];
+    if (sortType === 'medicines') {
+        title.innerText = currentLang === 'ar' ? 'ترتيب الأدوية حسب' : 'Sort Medicines By';
+        options = [
+            { value: 'expiry_asc', label: currentLang === 'ar' ? 'الأقرب انتهاء أولاً' : 'Closest Expiry First' },
+            { value: 'expiry_desc', label: currentLang === 'ar' ? 'الأبعد انتهاء أولاً' : 'Farthest Expiry First' },
+            { value: 'name_asc', label: currentLang === 'ar' ? 'الاسم (أ-ي)' : 'Name A-Z' },
+            { value: 'name_desc', label: currentLang === 'ar' ? 'الاسم (ي-أ)' : 'Name Z-A' },
+            { value: 'date_desc', label: currentLang === 'ar' ? 'الأحدث أولاً' : 'Newest First' }
+        ];
+    } else if (sortType === 'companies') {
+        title.innerText = currentLang === 'ar' ? 'ترتيب الشركات حسب' : 'Sort Companies By';
+        options = [
+            { value: 'alpha', label: currentLang === 'ar' ? 'أبجدي' : 'Alphabetical' },
+            { value: 'count_desc', label: currentLang === 'ar' ? 'عدد الأدوية (تنازلي)' : 'Medicine Count (Desc)' },
+            { value: 'count_asc', label: currentLang === 'ar' ? 'عدد الأدوية (تصاعدي)' : 'Medicine Count (Asc)' },
+            { value: 'popular', label: currentLang === 'ar' ? 'الأكثر شيوعاً' : 'Most Popular' }
+        ];
+    }
+    optionsList.innerHTML = options.map(opt => `<button class="sort-option-btn" data-value="${opt.value}">${opt.label}</button>`).join('');
+    optionsList.querySelectorAll('.sort-option-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const value = btn.getAttribute('data-value');
+            if (onSelectCallback) onSelectCallback(value);
+            closeModal('customSortModal');
+        });
+    });
+    openModal('customSortModal');
 }
 
 function renderHome() {
@@ -754,15 +889,56 @@ async function showStats() {
     document.getElementById('stats').innerHTML = `<div class="stats-box"><div>${t('total')}: <strong>${total}</strong></div><div>${t('pharmacy_count')}: <strong>${pharmacyCount}</strong></div><div>${t('expired')}: <strong style="color:var(--danger)">${expired}</strong></div><div>${t('expiring_30')}: <strong style="color:var(--warning)">${expiring30}</strong></div></div>`;
 }
 
+async function getFilteredAndSorted() {
+    let list = await db.meds.toArray();
+    
+    if(searchQuery.trim()){ 
+        const q = searchQuery.toLowerCase(); 
+        list = list.filter(m => m.name.toLowerCase().includes(q) || 
+                              (m.scientificName && m.scientificName.toLowerCase().includes(q)) || 
+                              (m.company && m.company.toLowerCase().includes(q)) || 
+                              (m.barcode && m.barcode.toLowerCase().includes(q))); 
+    }
+    if(typeFilter !== 'all') list = list.filter(m => m.type === typeFilter);
+    
+    const uniqueMap = new Map();
+    for (const med of list) {
+        const key = `${med.name}|${med.scientificName || ''}|${med.company || ''}|${med.dosageForm || ''}|${med.dosage || ''}`;
+        if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, med);
+        }
+    }
+    list = Array.from(uniqueMap.values());
+    
+    if(sortBy === 'expiry_asc') list.sort((a,b)=>getDaysRemaining(a.expiry)-getDaysRemaining(b.expiry));
+    else if(sortBy === 'expiry_desc') list.sort((a,b)=>getDaysRemaining(b.expiry)-getDaysRemaining(a.expiry));
+    else if(sortBy === 'name_asc') list.sort((a,b)=>a.name.localeCompare(b.name));
+    else if(sortBy === 'name_desc') list.sort((a,b)=>b.name.localeCompare(a.name));
+    else if(sortBy === 'date_desc') list.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+    return list;
+}
+
 async function renderAllMedicines() {
     typeFilter = MED_TYPES.GENERAL;
     const container = document.getElementById('pageContent');
     container.innerHTML = `
         <div class="search-container"><div class="search-wrapper"><input type="text" id="search" placeholder="${t('search_placeholder')}"><button class="search-btn">${t('search_btn')}</button><button id="barcodeSearchBtn" class="barcode-search-btn">📷 باركود</button></div><div id="suggestionsBox" class="suggestions-list"></div></div>
-        <div class="filters-bar"><select id="sortBy" class="sort-select"><option value="expiry_asc">${t('closest_expiry')}</option><option value="expiry_desc">${t('farthest_expiry')}</option><option value="name_asc">${t('name_asc')}</option><option value="name_desc">${t('name_desc')}</option><option value="date_desc">${t('newest_first')}</option></select><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button><button id="batchAddToPharmacyBtn" class="plus-icon-btn" style="display:none;">${t('batch_add_to_pharmacy')}</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">🗑️ ${t('batch_delete')}</button><button id="addGeneralMedBtn" class="plus-icon-btn">${t('add_med')}</button></div>
+        <div class="filters-bar"><button id="customSortBtn" class="sort-select-btn">🔽 ${t('sort_by')}</button><button id="addGeneralMedBtn" class="plus-icon-btn">${t('add_med')}</button><button id="batchAddToPharmacyBtn" class="plus-icon-btn" style="display:none;">${t('batch_add_to_pharmacy')}</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">🗑️ ${t('batch_delete')}</button><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button></div>
         <div class="content-list" id="contentList"></div><div id="stats"></div>
     `;
-    const searchInput = document.getElementById('search'), searchBtn = container.querySelector('.search-btn'), suggestionsBox = document.getElementById('suggestionsBox'), barcodeBtn = document.getElementById('barcodeSearchBtn'), sortSelect = document.getElementById('sortBy'), batchBtn = document.getElementById('batchDeleteBtn'), selectAllBtn = document.getElementById('selectAllBtn'), deselectAllBtn = document.getElementById('deselectAllBtn'), batchAddBtn = document.getElementById('batchAddToPharmacyBtn'), addGeneralBtn = document.getElementById('addGeneralMedBtn');
+    const searchInput = document.getElementById('search'), searchBtn = container.querySelector('.search-btn'), suggestionsBox = document.getElementById('suggestionsBox'), barcodeBtn = document.getElementById('barcodeSearchBtn'), batchBtn = document.getElementById('batchDeleteBtn'), selectAllBtn = document.getElementById('selectAllBtn'), deselectAllBtn = document.getElementById('deselectAllBtn'), batchAddBtn = document.getElementById('batchAddToPharmacyBtn'), addGeneralBtn = document.getElementById('addGeneralMedBtn');
+    
+    const customSortBtn = document.getElementById('customSortBtn');
+    if (customSortBtn) {
+        customSortBtn.addEventListener('click', () => {
+            openCustomSortModal('medicines', (value) => {
+                sortBy = value;
+                if (currentPage === 'all') renderAllMedicines();
+                else if (currentPage === 'pharmacy') renderPharmacyMedicines();
+            });
+        });
+    }
+    
     if(batchBtn) batchBtn.addEventListener('click', batchDelete);
     if(selectAllBtn) selectAllBtn.addEventListener('click', selectAllMeds);
     if(deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllMeds);
@@ -770,7 +946,6 @@ async function renderAllMedicines() {
     if(addGeneralBtn) addGeneralBtn.addEventListener('click', showAddGeneralFormModal);
     if(searchBtn && searchInput) searchBtn.addEventListener('click', () => { const q = searchInput.value.trim(); if(q) performSearch(q, 'all'); suggestionsBox.classList.remove('show'); });
     if(barcodeBtn) barcodeBtn.addEventListener('click', () => window.startScannerForSearch());
-    if(sortSelect){ sortSelect.value = sortBy; sortSelect.addEventListener('change', () => { sortBy = sortSelect.value; renderAllMedicines(); }); }
     if(searchInput){ searchInput.addEventListener('input', () => updateSearchSuggestions(searchInput, suggestionsBox, 'medicines')); searchInput.addEventListener('keypress', (e) => { if(e.key==='Enter'){ const q = searchInput.value.trim(); if(q) performSearch(q, 'all'); suggestionsBox.classList.remove('show'); } }); searchInput.addEventListener('blur', () => setTimeout(()=>suggestionsBox.classList.remove('show'),200)); }
     const list = await getFilteredAndSorted();
     await refreshWithPagination(list, true);
@@ -782,34 +957,31 @@ async function renderPharmacyMedicines() {
     const container = document.getElementById('pageContent');
     container.innerHTML = `
         <div class="search-container"><div class="search-wrapper"><input type="text" id="search" placeholder="${t('search_placeholder')}"><button class="search-btn">${t('search_btn')}</button><button id="barcodeSearchBtn" class="barcode-search-btn">📷 باركود</button></div><div id="suggestionsBox" class="suggestions-list"></div></div>
-        <div class="filters-bar"><select id="sortBy" class="sort-select"><option value="expiry_asc">${t('closest_expiry')}</option><option value="expiry_desc">${t('farthest_expiry')}</option><option value="name_asc">${t('name_asc')}</option><option value="name_desc">${t('name_desc')}</option><option value="date_desc">${t('newest_first')}</option></select><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">🗑️ ${t('batch_delete')}</button><button id="addMedBtn" class="plus-icon-btn">${t('add_med')}</button><button id="recycleBinBtn" class="recycle-bin-btn">🗑️ سلة المحذوفات</button></div>
+        <div class="filters-bar"><button id="customSortBtn" class="sort-select-btn">🔽 ${t('sort_by')}</button><button id="addMedBtn" class="plus-icon-btn">${t('add_med')}</button><button id="recycleBinBtn" class="recycle-bin-btn">سلة المحذوفات</button><button id="batchDeleteBtn" class="batch-delete-btn" style="display:none;">🗑️ ${t('batch_delete')}</button><button id="selectAllBtn" class="select-all-btn" style="display:none;">${t('select_all')}</button><button id="deselectAllBtn" class="deselect-all-btn" style="display:none;">${t('deselect_all')}</button></div>
         <div class="content-list" id="contentList"></div><div id="stats"></div>
     `;
     document.getElementById('addMedBtn')?.addEventListener('click', showAddFormModal);
     document.getElementById('recycleBinBtn')?.addEventListener('click', () => switchPage('deleted'));
-    const searchInput = document.getElementById('search'), searchBtn = container.querySelector('.search-btn'), suggestionsBox = document.getElementById('suggestionsBox'), barcodeBtn = document.getElementById('barcodeSearchBtn'), sortSelect = document.getElementById('sortBy'), batchBtn = document.getElementById('batchDeleteBtn'), selectAllBtn = document.getElementById('selectAllBtn'), deselectAllBtn = document.getElementById('deselectAllBtn');
+    const searchInput = document.getElementById('search'), searchBtn = container.querySelector('.search-btn'), suggestionsBox = document.getElementById('suggestionsBox'), barcodeBtn = document.getElementById('barcodeSearchBtn'), batchBtn = document.getElementById('batchDeleteBtn'), selectAllBtn = document.getElementById('selectAllBtn'), deselectAllBtn = document.getElementById('deselectAllBtn');
+    const customSortBtn = document.getElementById('customSortBtn');
+    if (customSortBtn) {
+        customSortBtn.addEventListener('click', () => {
+            openCustomSortModal('medicines', (value) => {
+                sortBy = value;
+                if (currentPage === 'all') renderAllMedicines();
+                else if (currentPage === 'pharmacy') renderPharmacyMedicines();
+            });
+        });
+    }
     if(batchBtn) batchBtn.addEventListener('click', batchDelete);
     if(selectAllBtn) selectAllBtn.addEventListener('click', selectAllMeds);
     if(deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllMeds);
     if(searchBtn && searchInput) searchBtn.addEventListener('click', () => { const q = searchInput.value.trim(); if(q) performSearch(q, 'pharmacy'); suggestionsBox.classList.remove('show'); });
     if(barcodeBtn) barcodeBtn.addEventListener('click', () => window.startScannerForSearch());
-    if(sortSelect){ sortSelect.value = sortBy; sortSelect.addEventListener('change', () => { sortBy = sortSelect.value; renderPharmacyMedicines(); }); }
     if(searchInput){ searchInput.addEventListener('input', () => updateSearchSuggestions(searchInput, suggestionsBox, 'medicines')); searchInput.addEventListener('keypress', (e) => { if(e.key==='Enter'){ const q = searchInput.value.trim(); if(q) performSearch(q, 'pharmacy'); suggestionsBox.classList.remove('show'); } }); searchInput.addEventListener('blur', () => setTimeout(()=>suggestionsBox.classList.remove('show'),200)); }
     const list = await getFilteredAndSorted();
     await refreshWithPagination(list, true);
     showStats();
-}
-
-async function getFilteredAndSorted() {
-    let list = await db.meds.toArray();
-    if(searchQuery.trim()){ const q = searchQuery.toLowerCase(); list = list.filter(m => m.name.toLowerCase().includes(q) || (m.scientificName && m.scientificName.toLowerCase().includes(q)) || (m.company && m.company.toLowerCase().includes(q)) || (m.barcode && m.barcode.toLowerCase().includes(q))); }
-    if(typeFilter !== 'all') list = list.filter(m => m.type === typeFilter);
-    if(sortBy === 'expiry_asc') list.sort((a,b)=>getDaysRemaining(a.expiry)-getDaysRemaining(b.expiry));
-    else if(sortBy === 'expiry_desc') list.sort((a,b)=>getDaysRemaining(b.expiry)-getDaysRemaining(a.expiry));
-    else if(sortBy === 'name_asc') list.sort((a,b)=>a.name.localeCompare(b.name));
-    else if(sortBy === 'name_desc') list.sort((a,b)=>b.name.localeCompare(a.name));
-    else if(sortBy === 'date_desc') list.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-    return list;
 }
 
 function toggleBatchMode() {
@@ -859,24 +1031,15 @@ async function batchRenameCompanies() {
         const companiesToRename = Array.from(selectedCompanies);
         for (let oldName of companiesToRename) {
             const medsToUpdate = await db.meds.where('company').equals(oldName).toArray();
-            for (let med of medsToUpdate) {
-                await db.meds.update(med.id, { company: newName });
-            }
+            for (let med of medsToUpdate) await db.meds.update(med.id, { company: newName });
             const deletedToUpdate = await db.deletedMeds.where('company').equals(oldName).toArray();
-            for (let med of deletedToUpdate) {
-                await db.deletedMeds.update(med.id, { company: newName });
-            }
+            for (let med of deletedToUpdate) await db.deletedMeds.update(med.id, { company: newName });
         }
         alert(`تم تحديث ${selectedCompanies.size} شركة إلى "${newName}"`);
         selectedCompanies.clear();
         batchMode = false;
         await renderCompaniesPage();
-    } catch (err) {
-        console.error('خطأ في batchRenameCompanies:', err);
-        alert('حدث خطأ أثناء التعديل الجماعي: ' + err.message);
-    } finally {
-        hideLoading();
-    }
+    } catch (err) { console.error(err); alert('حدث خطأ'); } finally { hideLoading(); }
 }
 
 async function batchRenameCategories() {
@@ -888,24 +1051,15 @@ async function batchRenameCategories() {
         const categoriesToRename = Array.from(selectedCategories);
         for (let oldName of categoriesToRename) {
             const medsToUpdate = await db.meds.where('category').equals(oldName).toArray();
-            for (let med of medsToUpdate) {
-                await db.meds.update(med.id, { category: newName });
-            }
+            for (let med of medsToUpdate) await db.meds.update(med.id, { category: newName });
             const deletedToUpdate = await db.deletedMeds.where('category').equals(oldName).toArray();
-            for (let med of deletedToUpdate) {
-                await db.deletedMeds.update(med.id, { category: newName });
-            }
+            for (let med of deletedToUpdate) await db.deletedMeds.update(med.id, { category: newName });
         }
         alert(`تم تحديث ${selectedCategories.size} تصنيف إلى "${newName}"`);
         selectedCategories.clear();
         batchMode = false;
         await renderCategoriesPage();
-    } catch (err) {
-        console.error('خطأ في batchRenameCategories:', err);
-        alert('حدث خطأ أثناء التعديل الجماعي: ' + err.message);
-    } finally {
-        hideLoading();
-    }
+    } catch (err) { console.error(err); alert('حدث خطأ'); } finally { hideLoading(); }
 }
 
 async function batchDeleteCompanies() {
@@ -915,7 +1069,7 @@ async function batchDeleteCompanies() {
     try {
         for (let c of selectedCompanies) {
             const meds = await db.meds.where('company').equals(c).toArray();
-            for (let m of meds) await db.deletedMeds.add(m);
+            for (let m of meds) await db.deletedMeds.add({ ...m, deletedFromPage: 'companies', deletedAt: new Date().toISOString() });
             await db.meds.where('company').equals(c).delete();
         }
         alert('تم الحذف');
@@ -932,7 +1086,7 @@ async function batchDeleteCategories() {
     try {
         for (let c of selectedCategories) {
             const meds = await db.meds.where('category').equals(c).toArray();
-            for (let m of meds) await db.deletedMeds.add(m);
+            for (let m of meds) await db.deletedMeds.add({ ...m, deletedFromPage: 'categories', deletedAt: new Date().toISOString() });
             await db.meds.where('category').equals(c).delete();
         }
         alert('تم الحذف');
@@ -946,7 +1100,6 @@ async function renderCompaniesPage() {
     if (currentCompany) return showMedicinesByCompany(currentCompany);
     batchMode = false;
     selectedCompanies.clear();
-
     const meds = await db.meds.toArray();
     const companyMap = new Map();
     meds.forEach(m => {
@@ -957,7 +1110,6 @@ async function renderCompaniesPage() {
     });
     let companies = Array.from(companyMap.entries()).map(([name, data]) => ({ name, origin: data.origin, count: data.count }));
     companies.sort((a, b) => a.name.localeCompare(b.name));
-
     const container = document.getElementById('pageContent');
     if (!companies.length) {
         container.innerHTML = `<div class="empty-state">${t('no_companies')}</div>`;
@@ -965,15 +1117,13 @@ async function renderCompaniesPage() {
     }
     container.innerHTML = `
         <div class="search-container"><div class="search-wrapper"><input id="companySearch" placeholder="🔍 بحث عن شركة..."><button id="searchCompanyBtn">${t('search_btn')}</button></div><div id="suggestionsBox" class="suggestions-list"></div></div>
-        <div class="companies-sort-bar" style="display:flex; gap:10px; margin:12px 0; flex-wrap:wrap;"><label>${t('companies_sort')}</label><select id="companiesSort" class="sort-select"><option value="alpha">${t('alphabetical')}</option><option value="count_desc">${t('by_med_count')} (تنازلي)</option><option value="count_asc">${t('by_med_count')} (تصاعدي)</option><option value="popular">${t('popular')}</option></select><button id="addCompanyBtn" class="main-btn">إضافة شركة جديدة</button><button id="batchModeBtn" class="main-btn" style="background:var(--warning)">تحديد متعدد</button><button id="selectAllCompaniesBtn" class="main-btn" style="background:var(--success); display:none;">تحديد الكل</button></div>
+        <div class="companies-sort-bar" style="display:flex; gap:10px; margin:12px 0; flex-wrap:wrap;"><label>${t('companies_sort')}</label><button id="customCompaniesSortBtn" class="sort-select-btn">🔽 ${t('sort_by')}</button><button id="addCompanyBtn" class="main-btn">إضافة شركة جديدة</button><button id="batchModeBtn" class="main-btn" style="background:var(--warning)">تحديد متعدد</button><button id="selectAllCompaniesBtn" class="main-btn" style="background:var(--success); display:none;">تحديد الكل</button></div>
         <div id="batchActionsBar" class="batch-actions-bar" style="display:none;"><button id="batchRenameBtn" class="batch-rename-btn">تعديل جماعي (0)</button><button id="batchDeleteCompaniesBtn" class="batch-delete-entity-btn">🗑️ حذف جماعي</button><button id="batchCancelBtn" class="batch-cancel-btn">إلغاء التحديد</button></div>
         <div id="companiesList"></div>
     `;
-
     const searchInput = document.getElementById('companySearch');
     const searchBtn = document.getElementById('searchCompanyBtn');
     const suggestionsBox = document.getElementById('suggestionsBox');
-    const sortSelect = document.getElementById('companiesSort');
     const addBtn = document.getElementById('addCompanyBtn');
     const batchModeBtn = document.getElementById('batchModeBtn');
     const selectAllCompaniesBtn = document.getElementById('selectAllCompaniesBtn');
@@ -981,40 +1131,22 @@ async function renderCompaniesPage() {
     const renameBtn = document.getElementById('batchRenameBtn');
     const deleteBtn = document.getElementById('batchDeleteCompaniesBtn');
     const cancelBtn = document.getElementById('batchCancelBtn');
-
+    const customCompaniesSortBtn = document.getElementById('customCompaniesSortBtn');
     if (searchInput) searchInput.value = currentCompaniesSearchTerm;
-    if (sortSelect) sortSelect.value = currentCompaniesSortType;
-
-    if (searchBtn && searchInput) {
-        searchBtn.addEventListener('click', () => {
-            const q = searchInput.value.trim();
-            if (q) {
-                saveSearchQuery('companies', q);
-                filterCompanies(q);
-            }
-            suggestionsBox.classList.remove('show');
+    if (customCompaniesSortBtn) {
+        customCompaniesSortBtn.addEventListener('click', () => {
+            openCustomSortModal('companies', (value) => {
+                currentCompaniesSortType = value;
+                const term = searchInput?.value || '';
+                displayCompanies(term, value);
+            });
         });
     }
+    if (searchBtn && searchInput) searchBtn.addEventListener('click', () => { const q = searchInput.value.trim(); if (q) { saveSearchQuery('companies', q); filterCompanies(q); } suggestionsBox.classList.remove('show'); });
     if (searchInput) {
         searchInput.addEventListener('input', () => updateSearchSuggestions(searchInput, suggestionsBox, 'companies'));
-        searchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                const q = searchInput.value.trim();
-                if (q) {
-                    saveSearchQuery('companies', q);
-                    filterCompanies(q);
-                }
-                suggestionsBox.classList.remove('show');
-            }
-        });
+        searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') { const q = searchInput.value.trim(); if (q) { saveSearchQuery('companies', q); filterCompanies(q); } suggestionsBox.classList.remove('show'); } });
         searchInput.addEventListener('blur', () => setTimeout(() => suggestionsBox.classList.remove('show'), 200));
-    }
-    if (sortSelect) {
-        sortSelect.addEventListener('change', () => {
-            currentCompaniesSortType = sortSelect.value;
-            const term = searchInput?.value || '';
-            filterCompanies(term);
-        });
     }
     if (addBtn) addBtn.addEventListener('click', () => window.addNewCompany());
     if (batchModeBtn) {
@@ -1036,80 +1168,30 @@ async function renderCompaniesPage() {
             }
         });
     }
-    if (selectAllCompaniesBtn) {
-        selectAllCompaniesBtn.addEventListener('click', () => {
-            const currentCompanies = Array.from(document.querySelectorAll('#companiesList .company-card')).map(card => card.getAttribute('data-company'));
-            for (let company of currentCompanies) {
-                if (!selectedCompanies.has(company)) {
-                    toggleSelectCompany(company);
-                }
-            }
-            updateBatchRenameBtnCount();
-        });
-    }
+    if (selectAllCompaniesBtn) selectAllCompaniesBtn.addEventListener('click', () => { const currentCompanies = Array.from(document.querySelectorAll('#companiesList .company-card')).map(card => card.getAttribute('data-company')); for (let company of currentCompanies) { if (!selectedCompanies.has(company)) toggleSelectCompany(company); } updateBatchRenameBtnCount(); });
     if (renameBtn) renameBtn.addEventListener('click', batchRenameCompanies);
     if (deleteBtn) deleteBtn.addEventListener('click', batchDeleteCompanies);
-    if (cancelBtn) cancelBtn.addEventListener('click', () => {
-        selectedCompanies.clear();
-        renameBtn.innerText = 'تعديل جماعي (0)';
-        renderCompaniesPage();
-    });
-
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { selectedCompanies.clear(); renameBtn.innerText = 'تعديل جماعي (0)'; renderCompaniesPage(); });
     await displayCompanies(currentCompaniesSearchTerm, currentCompaniesSortType);
 }
 
 async function renderCompaniesInBatchMode() {
     const meds = await db.meds.toArray();
     const map = new Map();
-    meds.forEach(m => {
-        if (m.company) map.set(m.company, { origin: m.origin || 'غير معروف', count: (map.get(m.company)?.count || 0) + 1 });
-    });
+    meds.forEach(m => { if (m.company) map.set(m.company, { origin: m.origin || 'غير معروف', count: (map.get(m.company)?.count || 0) + 1 }); });
     let companies = Array.from(map.entries()).map(([n, d]) => ({ name: n, origin: d.origin, count: d.count }));
-
-    if (currentCompaniesSearchTerm.trim()) {
-        companies = companies.filter(c => c.name.toLowerCase().includes(currentCompaniesSearchTerm.toLowerCase()));
-    }
+    if (currentCompaniesSearchTerm.trim()) companies = companies.filter(c => c.name.toLowerCase().includes(currentCompaniesSearchTerm.toLowerCase()));
     if (currentCompaniesSortType === 'alpha') companies.sort((a, b) => a.name.localeCompare(b.name));
     else if (currentCompaniesSortType === 'count_desc') companies.sort((a, b) => b.count - a.count);
     else if (currentCompaniesSortType === 'count_asc') companies.sort((a, b) => a.count - b.count);
     else if (currentCompaniesSortType === 'popular') companies.sort((a, b) => b.count - a.count);
-
     const container = document.getElementById('companiesList');
-    container.innerHTML = `<div class="companies-grid">${companies.map(c => `
-        <div class="company-card ${selectedCompanies.has(c.name) ? 'selected' : ''}" data-company="${escapeHtml(c.name)}">
-            <div>🏭 ${escapeHtml(c.name)}</div>
-            <div class="company-origin">📍 ${escapeHtml(c.origin)}</div>
-            <div class="medicine-count">📊 ${t('medicine_count')}: ${c.count}</div>
-            <div class="checkbox" style="display:flex;"></div>
-            <button class="delete-entity-btn" data-delete="${escapeHtml(c.name)}">🗑️ حذف</button>
-        </div>`).join('')}</div>`;
-
+    container.innerHTML = `<div class="companies-grid">${companies.map(c => `<div class="company-card ${selectedCompanies.has(c.name) ? 'selected' : ''}" data-company="${escapeHtml(c.name)}"><div>🏭 ${escapeHtml(c.name)}</div><div class="company-origin">📍 ${escapeHtml(c.origin)}</div><div class="medicine-count">📊 ${t('medicine_count')}: ${c.count}</div><div class="checkbox" style="display:flex;"></div><button class="delete-entity-btn" data-delete="${escapeHtml(c.name)}">🗑️ حذف</button></div>`).join('')}</div>`;
     document.querySelectorAll('.company-card').forEach(card => {
         const comp = card.getAttribute('data-company');
         const del = card.querySelector('.delete-entity-btn');
-        if (del) {
-            del.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                if (confirm(`حذف الشركة "${comp}" وجميع أدويتها؟`)) {
-                    showLoading();
-                    try {
-                        const medsToDelete = await db.meds.where('company').equals(comp).toArray();
-                        for (let m of medsToDelete) await db.deletedMeds.add(m);
-                        await db.meds.where('company').equals(comp).delete();
-                        renderCompaniesPage();
-                    } catch (e) { alert('خطأ'); } finally { hideLoading(); }
-                }
-            });
-        }
-        card.addEventListener('click', (e) => {
-            if (e.target === del) return;
-            if (batchMode) {
-                toggleSelectCompany(comp);
-                document.getElementById('batchRenameBtn').innerText = `تعديل جماعي (${selectedCompanies.size})`;
-            } else {
-                showCompanyMedicines(comp);
-            }
-        });
+        if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف الشركة "${comp}" وجميع أدويتها؟`)) { showLoading(); try { const medsToDelete = await db.meds.where('company').equals(comp).toArray(); for (let m of medsToDelete) await db.deletedMeds.add({ ...m, deletedFromPage: 'companies', deletedAt: new Date().toISOString() }); await db.meds.where('company').equals(comp).delete(); renderCompaniesPage(); } catch (e) { alert('خطأ'); } finally { hideLoading(); } } });
+        card.addEventListener('click', (e) => { if (e.target === del) return; if (batchMode) { toggleSelectCompany(comp); document.getElementById('batchRenameBtn').innerText = `تعديل جماعي (${selectedCompanies.size})`; } else { showCompanyMedicines(comp); } });
     });
 }
 
@@ -1121,57 +1203,27 @@ function updateBatchRenameBtnCount() {
 async function displayCompanies(searchTerm, sortType) {
     const meds = await db.meds.toArray();
     const map = new Map();
-    meds.forEach(m => {
-        if (m.company && m.company.trim()) {
-            if (!map.has(m.company)) map.set(m.company, { origin: m.origin || 'غير معروف', count: 1 });
-            else map.get(m.company).count++;
-        }
-    });
+    meds.forEach(m => { if (m.company && m.company.trim()) { if (!map.has(m.company)) map.set(m.company, { origin: m.origin || 'غير معروف', count: 1 }); else map.get(m.company).count++; } });
     let companies = Array.from(map.entries()).map(([name, data]) => ({ name, origin: data.origin, count: data.count }));
     if (searchTerm.trim()) companies = companies.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()));
     if (sortType === 'alpha') companies.sort((a, b) => a.name.localeCompare(b.name));
     else if (sortType === 'count_desc') companies.sort((a, b) => b.count - a.count);
     else if (sortType === 'count_asc') companies.sort((a, b) => a.count - b.count);
     else if (sortType === 'popular') companies.sort((a, b) => b.count - a.count);
-
     const container = document.getElementById('companiesList');
-    if (!companies.length) {
-        container.innerHTML = `<div class="empty-state">${t('no_companies')}</div>`;
-        return;
-    }
-    container.innerHTML = `<div class="companies-grid">${companies.map(c => `
-        <div class="company-card" data-company="${escapeHtml(c.name)}">
-            <div>🏭 ${escapeHtml(c.name)}</div>
-            <div class="company-origin">📍 ${escapeHtml(c.origin)}</div>
-            <div class="medicine-count">📊 ${t('medicine_count')}: ${c.count}</div>
-            <button class="delete-entity-btn" data-delete="${escapeHtml(c.name)}">🗑️ حذف</button>
-        </div>`).join('')}</div>`;
-
+    if (!companies.length) { container.innerHTML = `<div class="empty-state">${t('no_companies')}</div>`; return; }
+    container.innerHTML = `<div class="companies-grid">${companies.map(c => `<div class="company-card" data-company="${escapeHtml(c.name)}"><div>🏭 ${escapeHtml(c.name)}</div><div class="company-origin">📍 ${escapeHtml(c.origin)}</div><div class="medicine-count">📊 ${t('medicine_count')}: ${c.count}</div><button class="delete-entity-btn" data-delete="${escapeHtml(c.name)}">🗑️ حذف</button></div>`).join('')}</div>`;
     document.querySelectorAll('.company-card').forEach(card => {
         const comp = card.getAttribute('data-company');
         const del = card.querySelector('.delete-entity-btn');
-        if (del) {
-            del.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                if (confirm(`حذف الشركة "${comp}" وجميع أدويتها؟`)) {
-                    showLoading();
-                    try {
-                        const medsToDelete = await db.meds.where('company').equals(comp).toArray();
-                        for (let m of medsToDelete) await db.deletedMeds.add(m);
-                        await db.meds.where('company').equals(comp).delete();
-                        renderCompaniesPage();
-                    } catch (e) { alert('خطأ'); } finally { hideLoading(); }
-                }
-            });
-        }
+        if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف الشركة "${comp}" وجميع أدويتها؟`)) { showLoading(); try { const medsToDelete = await db.meds.where('company').equals(comp).toArray(); for (let m of medsToDelete) await db.deletedMeds.add({ ...m, deletedFromPage: 'companies', deletedAt: new Date().toISOString() }); await db.meds.where('company').equals(comp).delete(); renderCompaniesPage(); } catch (e) { alert('خطأ'); } finally { hideLoading(); } } });
         card.addEventListener('click', () => showCompanyMedicines(comp));
     });
 }
 
 function filterCompanies(searchTerm) {
     currentCompaniesSearchTerm = searchTerm;
-    const sortType = document.getElementById('companiesSort')?.value || currentCompaniesSortType;
-    currentCompaniesSortType = sortType;
+    const sortType = currentCompaniesSortType;
     displayCompanies(searchTerm, sortType);
 }
 
@@ -1183,34 +1235,17 @@ function showCompanyMedicines(companyName) {
 async function showMedicinesByCompany(companyName) {
     const medsList = await db.meds.where('company').equals(companyName).toArray();
     const container = document.getElementById('pageContent');
-    container.innerHTML = `
-        <div class="company-header">
-            <button id="backToCompaniesBtn" class="back-to-companies-btn">← ${t('back_to_companies')}</button>
-            <h3 style="margin:16px 0;">🏭 ${escapeHtml(companyName)}</h3>
-        </div>
-        <div class="content-list" id="companyMedsList"></div>
-    `;
-    document.getElementById('backToCompaniesBtn')?.addEventListener('click', () => {
-        currentCompany = null;
-        renderCompaniesPage();
-    });
+    container.innerHTML = `<div class="company-header"><button id="backToCompaniesBtn" class="back-to-companies-btn">← ${t('back_to_companies')}</button><h3 style="margin:16px 0;">🏭 ${escapeHtml(companyName)}</h3></div><div class="content-list" id="companyMedsList"></div>`;
+    document.getElementById('backToCompaniesBtn')?.addEventListener('click', () => { currentCompany = null; renderCompaniesPage(); });
     const listDiv = document.getElementById('companyMedsList');
-    if (!medsList.length) {
-        listDiv.innerHTML = `<div class="empty-state">${t('no_meds')}</div>`;
-        return;
-    }
+    if (!medsList.length) { listDiv.innerHTML = `<div class="empty-state">${t('no_meds')}</div>`; return; }
     medsList.forEach(med => {
         const thumb = med.image ? `<img src="${med.image}" class="med-image-thumb">` : '<div class="med-image-thumb">💊</div>';
-        const card = document.createElement('div');
-        card.className = 'med-card';
+        const card = document.createElement('div'); card.className = 'med-card';
         card.innerHTML = `<div class="med-info">${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div>`;
-        const delBtn = document.createElement('button');
-        delBtn.className = 'delete-button';
+        const delBtn = document.createElement('button'); delBtn.className = 'delete-button';
         delBtn.innerHTML = `<div class="trash-bin-icon"><div class="bin-lid"></div><div class="bin-container"><div class="bin-line"></div><div class="bin-line"></div></div></div>`;
-        delBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (confirm(t('delete_confirm'))) moveToDeleted(med.id);
-        });
+        delBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(t('delete_confirm'))) moveToDeleted(med.id, currentPage); });
         card.appendChild(delBtn);
         card.addEventListener('click', () => showMedDetails(med));
         listDiv.appendChild(card);
@@ -1220,28 +1255,11 @@ async function showMedicinesByCompany(companyName) {
 async function renderCategoriesPage() {
     const meds = await db.meds.toArray();
     const catsMap = new Map();
-    meds.forEach(m => {
-        if (m.category && m.category.trim()) {
-            catsMap.set(m.category, (catsMap.get(m.category) || 0) + 1);
-        }
-    });
+    meds.forEach(m => { if (m.category && m.category.trim()) catsMap.set(m.category, (catsMap.get(m.category) || 0) + 1); });
     const cats = Array.from(catsMap.keys()).sort((a, b) => a.localeCompare(b));
     const container = document.getElementById('pageContent');
-    if (!cats.length) {
-        container.innerHTML = `<div class="empty-state">${t('no_categories')}</div>`;
-        return;
-    }
-    container.innerHTML = `
-        <button class="main-btn" id="addCategoryBtn" style="margin-bottom:16px;">إضافة تصنيف جديد</button>
-        <button id="batchModeCategoriesBtn" class="main-btn" style="background:var(--warning); margin-bottom:16px;">تحديد متعدد</button>
-        <button id="selectAllCategoriesBtn" class="main-btn" style="background:var(--success); display:none;">تحديد الكل</button>
-        <div id="batchActionsCategoriesBar" class="batch-actions-bar" style="display:none;">
-            <button id="batchRenameCategoriesBtn" class="batch-rename-btn">تعديل جماعي (0)</button>
-            <button id="batchDeleteCategoriesBtn" class="batch-delete-entity-btn">🗑️ حذف جماعي</button>
-            <button id="batchCancelCategoriesBtn" class="batch-cancel-btn">إلغاء التحديد</button>
-        </div>
-        <div class="categories-grid" id="categoriesGrid"></div>
-    `;
+    if (!cats.length) { container.innerHTML = `<div class="empty-state">${t('no_categories')}</div>`; return; }
+    container.innerHTML = `<button class="main-btn" id="addCategoryBtn" style="margin-bottom:16px;">إضافة تصنيف جديد</button><button id="batchModeCategoriesBtn" class="main-btn" style="background:var(--warning); margin-bottom:16px;">تحديد متعدد</button><button id="selectAllCategoriesBtn" class="main-btn" style="background:var(--success); display:none;">تحديد الكل</button><div id="batchActionsCategoriesBar" class="batch-actions-bar" style="display:none;"><button id="batchRenameCategoriesBtn" class="batch-rename-btn">تعديل جماعي (0)</button><button id="batchDeleteCategoriesBtn" class="batch-delete-entity-btn">🗑️ حذف جماعي</button><button id="batchCancelCategoriesBtn" class="batch-cancel-btn">إلغاء التحديد</button></div><div class="categories-grid" id="categoriesGrid"></div>`;
     document.getElementById('addCategoryBtn')?.addEventListener('click', () => addNewCategoryForList());
     const batchModeBtn = document.getElementById('batchModeCategoriesBtn');
     const selectAllCategoriesBtn = document.getElementById('selectAllCategoriesBtn');
@@ -1249,115 +1267,29 @@ async function renderCategoriesPage() {
     const renameBtn = document.getElementById('batchRenameCategoriesBtn');
     const deleteBtn = document.getElementById('batchDeleteCategoriesBtn');
     const cancelBtn = document.getElementById('batchCancelCategoriesBtn');
-
-    if (batchModeBtn) {
-        batchModeBtn.addEventListener('click', () => {
-            batchMode = !batchMode;
-            if (batchMode) {
-                batchBar.style.display = 'flex';
-                if (selectAllCategoriesBtn) selectAllCategoriesBtn.style.display = 'inline-flex';
-                batchModeBtn.style.background = 'var(--success)';
-                batchModeBtn.innerText = 'إلغاء التحديد';
-                renderCategoriesInBatchMode(cats, catsMap);
-            } else {
-                batchBar.style.display = 'none';
-                if (selectAllCategoriesBtn) selectAllCategoriesBtn.style.display = 'none';
-                batchModeBtn.style.background = 'var(--warning)';
-                batchModeBtn.innerText = 'تحديد متعدد';
-                selectedCategories.clear();
-                renderCategoriesPage();
-            }
-        });
-    }
-    if (selectAllCategoriesBtn) {
-        selectAllCategoriesBtn.addEventListener('click', () => {
-            const currentCategories = Array.from(document.querySelectorAll('#categoriesGrid .category-card')).map(card => card.getAttribute('data-category'));
-            for (let cat of currentCategories) {
-                if (!selectedCategories.has(cat)) {
-                    toggleSelectCategory(cat);
-                }
-            }
-            updateBatchRenameCategoriesCount();
-        });
-    }
+    if (batchModeBtn) batchModeBtn.addEventListener('click', () => { batchMode = !batchMode; if (batchMode) { batchBar.style.display = 'flex'; if (selectAllCategoriesBtn) selectAllCategoriesBtn.style.display = 'inline-flex'; batchModeBtn.style.background = 'var(--success)'; batchModeBtn.innerText = 'إلغاء التحديد'; renderCategoriesInBatchMode(cats, catsMap); } else { batchBar.style.display = 'none'; if (selectAllCategoriesBtn) selectAllCategoriesBtn.style.display = 'none'; batchModeBtn.style.background = 'var(--warning)'; batchModeBtn.innerText = 'تحديد متعدد'; selectedCategories.clear(); renderCategoriesPage(); } });
+    if (selectAllCategoriesBtn) selectAllCategoriesBtn.addEventListener('click', () => { const currentCategories = Array.from(document.querySelectorAll('#categoriesGrid .category-card')).map(card => card.getAttribute('data-category')); for (let cat of currentCategories) { if (!selectedCategories.has(cat)) toggleSelectCategory(cat); } updateBatchRenameCategoriesCount(); });
     if (renameBtn) renameBtn.addEventListener('click', batchRenameCategories);
     if (deleteBtn) deleteBtn.addEventListener('click', batchDeleteCategories);
-    if (cancelBtn) cancelBtn.addEventListener('click', () => {
-        selectedCategories.clear();
-        renameBtn.innerText = 'تعديل جماعي (0)';
-        renderCategoriesPage();
-    });
-
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { selectedCategories.clear(); renameBtn.innerText = 'تعديل جماعي (0)'; renderCategoriesPage(); });
     const grid = document.getElementById('categoriesGrid');
-    grid.innerHTML = cats.map(c => `
-        <div class="category-card" data-category="${escapeHtml(c)}">
-            <div>📂 ${escapeHtml(c)}</div>
-            <div class="medicine-count">📊 ${t('medicine_count')}: ${catsMap.get(c)}</div>
-            <button class="delete-entity-btn" data-cat="${escapeHtml(c)}">🗑️ حذف</button>
-        </div>
-    `).join('');
-
+    grid.innerHTML = cats.map(c => `<div class="category-card" data-category="${escapeHtml(c)}"><div>📂 ${escapeHtml(c)}</div><div class="medicine-count">📊 ${t('medicine_count')}: ${catsMap.get(c)}</div><button class="delete-entity-btn" data-cat="${escapeHtml(c)}">🗑️ حذف</button></div>`).join('');
     grid.querySelectorAll('.category-card').forEach(card => {
         const cat = card.getAttribute('data-category');
         const del = card.querySelector('.delete-entity-btn');
-        if (del) {
-            del.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                if (confirm(`حذف التصنيف "${cat}" وجميع أدويته؟`)) {
-                    showLoading();
-                    try {
-                        const medsToDelete = await db.meds.where('category').equals(cat).toArray();
-                        for (let m of medsToDelete) await db.deletedMeds.add(m);
-                        await db.meds.where('category').equals(cat).delete();
-                        renderCategoriesPage();
-                    } catch (e) { alert('خطأ'); } finally { hideLoading(); }
-                }
-            });
-        }
-        card.addEventListener('click', async () => {
-            if (batchMode) {
-                toggleSelectCategory(cat);
-                updateBatchRenameCategoriesCount();
-            } else {
-                const filtered = (await db.meds.toArray()).filter(m => m.category === cat);
-                renderMedicationsInList(filtered);
-            }
-        });
+        if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف التصنيف "${cat}" وجميع أدويته؟`)) { showLoading(); try { const medsToDelete = await db.meds.where('category').equals(cat).toArray(); for (let m of medsToDelete) await db.deletedMeds.add({ ...m, deletedFromPage: 'categories', deletedAt: new Date().toISOString() }); await db.meds.where('category').equals(cat).delete(); renderCategoriesPage(); } catch (e) { alert('خطأ'); } finally { hideLoading(); } } });
+        card.addEventListener('click', async () => { if (batchMode) { toggleSelectCategory(cat); updateBatchRenameCategoriesCount(); } else { const filtered = (await db.meds.toArray()).filter(m => m.category === cat); renderMedicationsInList(filtered); } });
     });
 }
 
 function renderCategoriesInBatchMode(cats, catsMap) {
     const grid = document.getElementById('categoriesGrid');
-    grid.innerHTML = cats.map(c => `
-        <div class="category-card ${selectedCategories.has(c) ? 'selected' : ''}" data-category="${escapeHtml(c)}">
-            <div>📂 ${escapeHtml(c)}</div>
-            <div class="medicine-count">📊 ${t('medicine_count')}: ${catsMap.get(c)}</div>
-            <div class="checkbox" style="display:flex;"></div>
-            <button class="delete-entity-btn" data-cat="${escapeHtml(c)}">🗑️ حذف</button>
-        </div>
-    `).join('');
+    grid.innerHTML = cats.map(c => `<div class="category-card ${selectedCategories.has(c) ? 'selected' : ''}" data-category="${escapeHtml(c)}"><div>📂 ${escapeHtml(c)}</div><div class="medicine-count">📊 ${t('medicine_count')}: ${catsMap.get(c)}</div><div class="checkbox" style="display:flex;"></div><button class="delete-entity-btn" data-cat="${escapeHtml(c)}">🗑️ حذف</button></div>`).join('');
     grid.querySelectorAll('.category-card').forEach(card => {
         const cat = card.getAttribute('data-category');
         const del = card.querySelector('.delete-entity-btn');
-        if (del) {
-            del.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                if (confirm(`حذف التصنيف "${cat}" وجميع أدويته؟`)) {
-                    showLoading();
-                    try {
-                        const medsToDelete = await db.meds.where('category').equals(cat).toArray();
-                        for (let m of medsToDelete) await db.deletedMeds.add(m);
-                        await db.meds.where('category').equals(cat).delete();
-                        renderCategoriesPage();
-                    } catch (e) { alert('خطأ'); } finally { hideLoading(); }
-                }
-            });
-        }
-        card.addEventListener('click', (e) => {
-            if (e.target === del) return;
-            toggleSelectCategory(cat);
-            updateBatchRenameCategoriesCount();
-        });
+        if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف التصنيف "${cat}" وجميع أدويته؟`)) { showLoading(); try { const medsToDelete = await db.meds.where('category').equals(cat).toArray(); for (let m of medsToDelete) await db.deletedMeds.add({ ...m, deletedFromPage: 'categories', deletedAt: new Date().toISOString() }); await db.meds.where('category').equals(cat).delete(); renderCategoriesPage(); } catch (e) { alert('خطأ'); } finally { hideLoading(); } } });
+        card.addEventListener('click', (e) => { if (e.target === del) return; toggleSelectCategory(cat); updateBatchRenameCategoriesCount(); });
     });
 }
 
@@ -1382,15 +1314,7 @@ window.addNewCompany = async function () {
     const origin = prompt('أدخل المنشأ (الدولة) للشركة (اختياري):', '');
     showLoading('جاري إضافة الشركة...');
     try {
-        const dummy = {
-            name: '___temp___',
-            company: newComp.trim(),
-            origin: origin || '',
-            type: MED_TYPES.GENERAL,
-            expiry: '9999-12-31',
-            createdAt: new Date().toISOString(),
-            scientificName: '', category: '', dosageForm: '', dosage: '', barcode: '', image: null
-        };
+        const dummy = { name: '___temp___', company: newComp.trim(), origin: origin || '', type: MED_TYPES.GENERAL, expiry: '9999-12-31', createdAt: new Date().toISOString(), scientificName: '', category: '', dosageForm: '', dosage: '', barcode: '', image: null };
         await db.meds.add(dummy);
         await db.meds.where('name').equals('___temp___').delete();
         alert(`تمت إضافة الشركة "${newComp}" بنجاح`);
@@ -1402,22 +1326,14 @@ function renderMedicationsInList(list) {
     const container = document.getElementById('pageContent');
     container.innerHTML = `<div class="content-list" id="contentList"></div>`;
     const listDiv = document.getElementById('contentList');
-    if (!list.length) {
-        listDiv.innerHTML = `<div class="empty-state">${t('no_meds')}</div>`;
-        return;
-    }
+    if (!list.length) { listDiv.innerHTML = `<div class="empty-state">${t('no_meds')}</div>`; return; }
     list.forEach(med => {
         const thumb = med.image ? `<img src="${med.image}" class="med-image-thumb">` : '<div class="med-image-thumb">💊</div>';
-        const card = document.createElement('div');
-        card.className = 'med-card';
+        const card = document.createElement('div'); card.className = 'med-card';
         card.innerHTML = `<div class="med-info">${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div>`;
-        const delBtn = document.createElement('button');
-        delBtn.className = 'delete-button';
+        const delBtn = document.createElement('button'); delBtn.className = 'delete-button';
         delBtn.innerHTML = `<div class="trash-bin-icon"><div class="bin-lid"></div><div class="bin-container"><div class="bin-line"></div><div class="bin-line"></div></div></div>`;
-        delBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (confirm(t('delete_confirm'))) moveToDeleted(med.id);
-        });
+        delBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(t('delete_confirm'))) moveToDeleted(med.id, currentPage); });
         card.appendChild(delBtn);
         card.addEventListener('click', () => showMedDetails(med));
         listDiv.appendChild(card);
@@ -1432,11 +1348,7 @@ async function renderExpiringSoonPage() {
     container.innerHTML = `<div class="search-container"><div class="search-wrapper"><input type="text" id="search" placeholder="${t('search_placeholder')}"><button class="search-btn">${t('search_btn')}</button></div><div id="suggestionsBox" class="suggestions-list"></div></div><div class="content-list" id="contentList"></div>`;
     const searchInput = document.getElementById('search'), searchBtn = container.querySelector('.search-btn'), suggestionsBox = document.getElementById('suggestionsBox');
     if (searchBtn && searchInput) searchBtn.addEventListener('click', () => { const q = searchInput.value.trim(); if (q) performSearch(q, 'expiring'); suggestionsBox.classList.remove('show'); });
-    if (searchInput) {
-        searchInput.addEventListener('input', () => updateSearchSuggestions(searchInput, suggestionsBox, 'medicines'));
-        searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') { const q = searchInput.value.trim(); if (q) performSearch(q, 'expiring'); suggestionsBox.classList.remove('show'); } });
-        searchInput.addEventListener('blur', () => setTimeout(() => suggestionsBox.classList.remove('show'), 200));
-    }
+    if (searchInput) { searchInput.addEventListener('input', () => updateSearchSuggestions(searchInput, suggestionsBox, 'medicines')); searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') { const q = searchInput.value.trim(); if (q) performSearch(q, 'expiring'); suggestionsBox.classList.remove('show'); } }); searchInput.addEventListener('blur', () => setTimeout(() => suggestionsBox.classList.remove('show'), 200)); }
     await refreshWithPagination(soon, true);
 }
 
@@ -1456,35 +1368,18 @@ async function renderExplore() {
     const catsDiv = document.getElementById('tab-categories');
     if (catsDiv) {
         catsDiv.innerHTML = cats.length ? `<div class="categories-grid">${cats.map(c => `<div class="category-card" data-category="${c}">${c}<button class="delete-entity-btn" data-cat="${c}">🗑️</button></div>`).join('')}</div>` : `<div class="empty-state">${t('no_categories')}</div>`;
-        catsDiv.querySelectorAll('.category-card').forEach(card => {
-            const cat = card.getAttribute('data-category');
-            const del = card.querySelector('.delete-entity-btn');
-            if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف التصنيف "${cat}"؟`)) { await db.meds.where('category').equals(cat).delete(); renderExplore(); } });
-            card.addEventListener('click', async () => { const filtered = (await db.meds.toArray()).filter(m => m.category === cat); catsDiv.innerHTML = `<div class="content-list"></div>`; renderMedicationsInExplore(filtered, catsDiv); });
-        });
+        catsDiv.querySelectorAll('.category-card').forEach(card => { const cat = card.getAttribute('data-category'); const del = card.querySelector('.delete-entity-btn'); if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف التصنيف "${cat}"؟`)) { await db.meds.where('category').equals(cat).delete(); renderExplore(); } }); card.addEventListener('click', async () => { const filtered = (await db.meds.toArray()).filter(m => m.category === cat); catsDiv.innerHTML = `<div class="content-list"></div>`; renderMedicationsInExplore(filtered, catsDiv); }); });
     }
     const comps = await db.meds.toArray().then(m => [...new Set(m.map(x => x.company).filter(c => c && c.trim()))]);
     const compsDiv = document.getElementById('tab-companies');
     if (compsDiv) {
         compsDiv.innerHTML = comps.length ? `<div class="companies-grid">${comps.map(c => `<div class="company-card" data-company="${c}">${c}<button class="delete-entity-btn" data-company="${c}">🗑️</button></div>`).join('')}</div>` : `<div class="empty-state">${t('no_companies')}</div>`;
-        compsDiv.querySelectorAll('.company-card').forEach(card => {
-            const comp = card.getAttribute('data-company');
-            const del = card.querySelector('.delete-entity-btn');
-            if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف الشركة "${comp}"؟`)) { await db.meds.where('company').equals(comp).delete(); renderExplore(); } });
-            card.addEventListener('click', async () => { const filtered = (await db.meds.toArray()).filter(m => m.company === comp); compsDiv.innerHTML = `<div class="content-list"></div>`; renderMedicationsInExplore(filtered, compsDiv); });
-        });
+        compsDiv.querySelectorAll('.company-card').forEach(card => { const comp = card.getAttribute('data-company'); const del = card.querySelector('.delete-entity-btn'); if (del) del.addEventListener('click', async (e) => { e.stopPropagation(); if (confirm(`حذف الشركة "${comp}"؟`)) { await db.meds.where('company').equals(comp).delete(); renderExplore(); } }); card.addEventListener('click', async () => { const filtered = (await db.meds.toArray()).filter(m => m.company === comp); compsDiv.innerHTML = `<div class="content-list"></div>`; renderMedicationsInExplore(filtered, compsDiv); }); });
     }
     const soon = (await db.meds.toArray()).filter(m => getDaysRemaining(m.expiry) <= 7);
     const expDiv = document.getElementById('tab-expiring');
     if (expDiv) { expDiv.innerHTML = soon.length ? `<div class="content-list"></div>` : `<div class="empty-state">${t('no_meds')}</div>`; if (soon.length) renderMedicationsInExplore(soon, expDiv); }
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
-            document.getElementById(`tab-${btn.dataset.tab}`)?.classList.add('active');
-        });
-    });
+    document.querySelectorAll('.tab-btn').forEach(btn => { btn.addEventListener('click', () => { document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active')); document.getElementById(`tab-${btn.dataset.tab}`)?.classList.add('active'); }); });
 }
 
 function renderMedicationsInExplore(list, parentDiv) {
@@ -1494,13 +1389,11 @@ function renderMedicationsInExplore(list, parentDiv) {
     container.innerHTML = '';
     list.forEach(med => {
         const thumb = med.image ? `<img src="${med.image}" class="med-image-thumb">` : '<div class="med-image-thumb">💊</div>';
-        const card = document.createElement('div');
-        card.className = 'med-card';
+        const card = document.createElement('div'); card.className = 'med-card';
         card.innerHTML = `<div class="med-info">${thumb}<div class="med-text"><div class="med-name">💊 ${escapeHtml(med.name)}</div></div></div>`;
-        const delBtn = document.createElement('button');
-        delBtn.className = 'delete-button';
+        const delBtn = document.createElement('button'); delBtn.className = 'delete-button';
         delBtn.innerHTML = `<div class="trash-bin-icon"><div class="bin-lid"></div><div class="bin-container"><div class="bin-line"></div><div class="bin-line"></div></div></div>`;
-        delBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(t('delete_confirm'))) moveToDeleted(med.id); });
+        delBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(t('delete_confirm'))) moveToDeleted(med.id, currentPage); });
         card.appendChild(delBtn);
         card.addEventListener('click', () => showMedDetails(med));
         container.appendChild(card);
@@ -1565,6 +1458,59 @@ function showEditFormModal(med) {
     openModal('medFormModal');
 }
 
+function initCustomDatePickers() {
+    const pickers = ['medExpiry1', 'medExpiry2', 'medExpiry3'];
+    pickers.forEach(id => {
+        const hiddenInput = document.getElementById(id);
+        const displayInput = document.getElementById(`${id}Display`);
+        const dropdown = document.getElementById(`${id}Dropdown`);
+        if (!hiddenInput || !displayInput || !dropdown) return;
+        displayInput.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.date-picker-dropdown').forEach(d => d.style.display = 'none');
+            dropdown.style.display = 'block';
+            renderCalendar(dropdown, hiddenInput, displayInput);
+        });
+        document.addEventListener('click', (e) => {
+            if (!dropdown.contains(e.target) && e.target !== displayInput) dropdown.style.display = 'none';
+        });
+        if (hiddenInput.value) displayInput.value = hiddenInput.value;
+    });
+}
+
+function renderCalendar(container, hiddenInput, displayInput) {
+    let currentDate = hiddenInput.value ? new Date(hiddenInput.value) : new Date();
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    function buildCalendar(year, month) {
+        const firstDay = new Date(year, month, 1).getDay();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const today = new Date(); today.setHours(0,0,0,0);
+        let html = `<div class="date-picker-header"><button class="prev-month">‹</button><span class="date-picker-year-month">${year} / ${month+1}</span><button class="next-month">›</button></div><div class="date-picker-weekdays"><span>ح</span><span>ن</span><span>ث</span><span>ر</span><span>خ</span><span>ج</span><span>س</span></div><div class="date-picker-days">`;
+        let start = firstDay === 0 ? 6 : firstDay - 1;
+        for (let i = 0; i < start; i++) html += `<div class="date-picker-day"></div>`;
+        for (let d = 1; d <= daysInMonth; d++) {
+            let date = new Date(year, month, d);
+            let selectedClass = (hiddenInput.value === date.toISOString().split('T')[0]) ? 'selected' : '';
+            let isPast = date < today ? 'disabled' : '';
+            html += `<div class="date-picker-day ${selectedClass} ${isPast}" data-date="${date.toISOString().split('T')[0]}">${d}</div>`;
+        }
+        html += `</div>`;
+        container.innerHTML = html;
+        container.querySelectorAll('.date-picker-day:not(.disabled)').forEach(day => {
+            day.addEventListener('click', () => {
+                const val = day.getAttribute('data-date');
+                hiddenInput.value = val;
+                displayInput.value = val;
+                container.style.display = 'none';
+            });
+        });
+        container.querySelector('.prev-month')?.addEventListener('click', () => buildCalendar(year, month-1));
+        container.querySelector('.next-month')?.addEventListener('click', () => buildCalendar(year, month+1));
+    }
+    buildCalendar(year, month);
+}
+
 async function saveMedFromForm() {
     showLoading('جاري حفظ الدواء...');
     try {
@@ -1592,18 +1538,11 @@ async function saveMedFromForm() {
         const imgFile = document.getElementById('medImage')?.files[0];
         const saveOrUpdate = async (data) => {
             if (isEditing) {
-                delete data.createdAt;
                 data.id = currentMed.id;
-                
+                data.type = currentMed.type;
+                delete data.createdAt;
                 const duplicate = await isDuplicateMedicine(data, currentMed.id);
-                if (duplicate) {
-                    hideLoading();
-                    alert(currentLang === 'ar' 
-                        ? `لا يمكن التعديل. يوجد دواء مطابق بالفعل: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})`
-                        : `Cannot edit. Duplicate medicine exists: ${duplicate.name} (Expiry: ${duplicate.expiry})`);
-                    return;
-                }
-                
+                if (duplicate) { hideLoading(); alert(currentLang === 'ar' ? `لا يمكن التعديل. يوجد دواء مطابق بالفعل: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})` : `Cannot edit. Duplicate medicine exists: ${duplicate.name} (Expiry: ${duplicate.expiry})`); return; }
                 await db.meds.update(currentMed.id, data);
                 closeMedFormModal();
                 if (currentPage === 'all') renderAllMedicines();
@@ -1614,16 +1553,8 @@ async function saveMedFromForm() {
             } else {
                 for (let expiry of expiries) {
                     const newMed = { ...data, expiry };
-                    
                     const duplicate = await isDuplicateMedicine(newMed);
-                    if (duplicate) {
-                        hideLoading();
-                        alert(currentLang === 'ar' 
-                            ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})`
-                            : `Cannot add. Duplicate medicine exists: ${duplicate.name} (Expiry: ${duplicate.expiry})`);
-                        return;
-                    }
-                    
+                    if (duplicate) { hideLoading(); alert(currentLang === 'ar' ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})` : `Cannot add. Duplicate medicine exists: ${duplicate.name} (Expiry: ${duplicate.expiry})`); return; }
                     await db.meds.add(newMed);
                     await addMedicineToGeneralIfNotExists(newMed);
                 }
@@ -1635,22 +1566,12 @@ async function saveMedFromForm() {
                 alert(currentLang === 'ar' ? 'تمت الإضافة بنجاح' : 'Added successfully');
             }
         };
-        if (imgFile) {
-            const reader = new FileReader();
-            reader.onload = async (e) => { base.image = e.target.result; await saveOrUpdate(base); };
-            reader.readAsDataURL(imgFile);
-        } else {
-            if (isEditing && currentMed.image) base.image = currentMed.image;
-            await saveOrUpdate(base);
-        }
+        if (imgFile) { const reader = new FileReader(); reader.onload = async (e) => { base.image = e.target.result; await saveOrUpdate(base); }; reader.readAsDataURL(imgFile); }
+        else { if (isEditing && currentMed.image) base.image = currentMed.image; await saveOrUpdate(base); }
     } catch (err) { console.error(err); alert('حدث خطأ'); } finally { hideLoading(); }
 }
 
-function closeMedFormModal() {
-    closeModal('medFormModal');
-    isInEditMode = false;
-    currentMed = null;
-}
+function closeMedFormModal() { closeModal('medFormModal'); isInEditMode = false; currentMed = null; }
 
 function showAddGeneralFormModal() {
     document.getElementById('generalFormTitle').innerText = t('add_med');
@@ -1673,10 +1594,7 @@ async function saveGeneralMedFromForm() {
     showLoading('جاري حفظ الدواء...');
     try {
         const name = document.getElementById('genName')?.value.trim();
-        if (!name) {
-            alert(t('trade_name') + ' ' + (currentLang === 'ar' ? 'مطلوب' : 'required'));
-            return;
-        }
+        if (!name) { alert(t('trade_name') + ' ' + (currentLang === 'ar' ? 'مطلوب' : 'required')); return; }
         const medData = {
             name, scientificName: document.getElementById('genScientificName')?.value.trim() || '',
             company: document.getElementById('genCompany')?.value.trim() || '',
@@ -1690,32 +1608,12 @@ async function saveGeneralMedFromForm() {
             image: null,
             createdAt: new Date().toISOString()
         };
-        
         const duplicate = await isDuplicateMedicine(medData);
-        if (duplicate) {
-            hideLoading();
-            alert(currentLang === 'ar' 
-                ? `لا يمكن الإضافة. يوجد دواء عام مطابق بالفعل: ${duplicate.name}`
-                : `Cannot add. Duplicate general medicine exists: ${duplicate.name}`);
-            return;
-        }
-        
+        if (duplicate) { hideLoading(); alert(currentLang === 'ar' ? `لا يمكن الإضافة. يوجد دواء عام مطابق بالفعل: ${duplicate.name}` : `Cannot add. Duplicate general medicine exists: ${duplicate.name}`); return; }
         const imgFile = document.getElementById('genImage')?.files[0];
-        const save = async (data) => {
-            await db.meds.add(data);
-            closeGeneralFormModal();
-            if (currentPage === 'all') renderAllMedicines();
-            else if (currentPage === 'pharmacy') renderPharmacyMedicines();
-            updateBarChart();
-            alert(currentLang === 'ar' ? 'تمت الإضافة بنجاح' : 'Added successfully');
-        };
-        if (imgFile) {
-            const reader = new FileReader();
-            reader.onload = async (e) => { medData.image = e.target.result; await save(medData); };
-            reader.readAsDataURL(imgFile);
-        } else {
-            await save(medData);
-        }
+        const save = async (data) => { await db.meds.add(data); closeGeneralFormModal(); if (currentPage === 'all') renderAllMedicines(); else if (currentPage === 'pharmacy') renderPharmacyMedicines(); updateBarChart(); alert(currentLang === 'ar' ? 'تمت الإضافة بنجاح' : 'Added successfully'); };
+        if (imgFile) { const reader = new FileReader(); reader.onload = async (e) => { medData.image = e.target.result; await save(medData); }; reader.readAsDataURL(imgFile); }
+        else { await save(medData); }
     } catch (err) { console.error(err); alert('حدث خطأ'); } finally { hideLoading(); }
 }
 
@@ -1734,222 +1632,54 @@ async function updateCategoriesDatalist(datalistId) {
 
 window.addNewCategory = function (inputId) {
     const newCat = prompt('أدخل اسم التصنيف الجديد:');
-    if (newCat?.trim()) {
-        document.getElementById(inputId).value = newCat.trim();
-        updateCategoriesDatalist('medCategoriesList');
-        updateCategoriesDatalist('genCategoriesList');
-    }
+    if (newCat?.trim()) { document.getElementById(inputId).value = newCat.trim(); updateCategoriesDatalist('medCategoriesList'); updateCategoriesDatalist('genCategoriesList'); }
 };
 
 function openSettingsModal() {
     const container = document.getElementById('settingsContent');
-    if (!container) {
-        console.error('settingsContent element not found');
-        return;
-    }
-    container.innerHTML = `
-        <div class="settings-card" data-page="language">
-            <div class="settings-card-left"><span class="settings-card-icon">🌐</span><span class="settings-card-title">${t('language')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="darkmode">
-            <div class="settings-card-left"><span class="settings-card-icon">🌙</span><span class="settings-card-title">${t('dark_mode')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="color">
-            <div class="settings-card-left"><span class="settings-card-icon">🎨</span><span class="settings-card-title">${t('change_color')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="notify">
-            <div class="settings-card-left"><span class="settings-card-icon">⏰</span><span class="settings-card-title">${t('notification_days')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="defaultExpiry">
-            <div class="settings-card-left"><span class="settings-card-icon">📅</span><span class="settings-card-title">${t('default_expiry')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="searchHistory">
-            <div class="settings-card-left"><span class="settings-card-icon">🔍</span><span class="settings-card-title">${t('search_history')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="backupRestore">
-            <div class="settings-card-left"><span class="settings-card-icon">💾</span><span class="settings-card-title">${t('backup_restore')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="exportCSVPDF">
-            <div class="settings-card-left"><span class="settings-card-icon">📄</span><span class="settings-card-title">${t('export_csv')} / PDF</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-        <div class="settings-card" data-page="about">
-            <div class="settings-card-left"><span class="settings-card-icon">ℹ️</span><span class="settings-card-title">${t('about_app')}</span></div>
-            <span class="settings-card-arrow">→</span>
-        </div>
-    `;
-    container.querySelectorAll('.settings-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const page = card.getAttribute('data-page');
-            if (page === 'color') {
-                showColorModal();
-            } else if (page === 'language') {
-                showLanguageModal();
-            } else if (page === 'darkmode') {
-                toggleDarkMode();
-                closeModal('settingsModal');
-                setTimeout(() => openSettingsModal(), 100);
-            } else if (page === 'notify') {
-                showNotifySettings();
-            } else if (page === 'defaultExpiry') {
-                showDefaultExpirySettings();
-            } else if (page === 'searchHistory') {
-                showSearchHistorySettings();
-            } else if (page === 'backupRestore') {
-                showBackupRestoreSettings();
-            } else if (page === 'exportCSVPDF') {
-                showExportSettings();
-            } else if (page === 'about') {
-                showAbout();
-            }
-        });
-    });
+    if (!container) { console.error('settingsContent element not found'); return; }
+    container.innerHTML = `<div class="settings-card" data-page="language"><div class="settings-card-left"><span class="settings-card-icon">🌐</span><span class="settings-card-title">${t('language')}</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="darkmode"><div class="settings-card-left"><span class="settings-card-icon">🌙</span><span class="settings-card-title">${t('dark_mode')}</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="color"><div class="settings-card-left"><span class="settings-card-icon">🎨</span><span class="settings-card-title">${t('change_color')}</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="notify"><div class="settings-card-left"><span class="settings-card-icon">⏰</span><span class="settings-card-title">${t('notification_days')}</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="defaultExpiry"><div class="settings-card-left"><span class="settings-card-icon">📅</span><span class="settings-card-title">${t('default_expiry')}</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="searchHistory"><div class="settings-card-left"><span class="settings-card-icon">🔍</span><span class="settings-card-title">${t('search_history')}</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="backupRestore"><div class="settings-card-left"><span class="settings-card-icon">💾</span><span class="settings-card-title">${t('backup_restore')}</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="exportCSVPDF"><div class="settings-card-left"><span class="settings-card-icon">📄</span><span class="settings-card-title">${t('export_csv')} / PDF</span></div><span class="settings-card-arrow">→</span></div><div class="settings-card" data-page="about"><div class="settings-card-left"><span class="settings-card-icon">ℹ️</span><span class="settings-card-title">${t('about_app')}</span></div><span class="settings-card-arrow">→</span></div>`;
+    container.querySelectorAll('.settings-card').forEach(card => { card.addEventListener('click', (e) => { e.stopPropagation(); const page = card.getAttribute('data-page'); if (page === 'color') showColorModal(); else if (page === 'language') showLanguageModal(); else if (page === 'darkmode') { toggleDarkMode(); closeModal('settingsModal'); setTimeout(() => openSettingsModal(), 100); } else if (page === 'notify') showNotifySettings(); else if (page === 'defaultExpiry') showDefaultExpirySettings(); else if (page === 'searchHistory') showSearchHistorySettings(); else if (page === 'backupRestore') showBackupRestoreSettings(); else if (page === 'exportCSVPDF') showExportSettings(); else if (page === 'about') showAbout(); }); });
     openModal('settingsModal');
 }
 
 function showLanguageModal() {
     openModal('languageModal');
     const langOptions = document.querySelectorAll('.lang-option');
-    langOptions.forEach(btn => {
-        const newBtn = btn.cloneNode(true);
-        btn.parentNode.replaceChild(newBtn, btn);
-        newBtn.addEventListener('click', function() {
-            const newLang = this.getAttribute('data-lang');
-            if (confirm(currentLang === 'ar' ? `تغيير اللغة إلى ${newLang === 'ar' ? 'العربية' : 'الإنجليزية'}؟` : `Change language to ${newLang === 'ar' ? 'Arabic' : 'English'}?`)) {
-                changeLanguage(newLang);
-                closeModal('languageModal');
-                closeModal('settingsModal');
-                setTimeout(() => openSettingsModal(), 100);
-            }
-        });
-    });
+    langOptions.forEach(btn => { const newBtn = btn.cloneNode(true); btn.parentNode.replaceChild(newBtn, btn); newBtn.addEventListener('click', function() { const newLang = this.getAttribute('data-lang'); if (confirm(currentLang === 'ar' ? `تغيير اللغة إلى ${newLang === 'ar' ? 'العربية' : 'الإنجليزية'}؟` : `Change language to ${newLang === 'ar' ? 'Arabic' : 'English'}?`)) { changeLanguage(newLang); closeModal('languageModal'); closeModal('settingsModal'); setTimeout(() => openSettingsModal(), 100); } }); });
 }
 
 function showNotifySettings() {
     const days = prompt(t('notification_days'), localStorage.getItem('notificationDays') || '7');
-    if (days !== null && !isNaN(days)) {
-        const d = parseInt(days);
-        if (d >= 1 && d <= 90) {
-            localStorage.setItem('notificationDays', d);
-            alert(t('notification_set'));
-        } else {
-            alert(currentLang === 'ar' ? 'يجب أن تكون القيمة بين 1 و 90' : 'Value must be between 1 and 90');
-        }
-    }
+    if (days !== null && !isNaN(days)) { const d = parseInt(days); if (d >= 1 && d <= 90) { localStorage.setItem('notificationDays', d); alert(t('notification_set')); } else alert(currentLang === 'ar' ? 'يجب أن تكون القيمة بين 1 و 90' : 'Value must be between 1 and 90'); }
 }
 
 function showDefaultExpirySettings() {
     const val = prompt(t('default_expiry') + ' (1-3650 يوم، 0 لإدخال يدوي)', localStorage.getItem('defaultExpiryPeriod') || '365');
-    if (val !== null) {
-        const period = parseInt(val);
-        if (!isNaN(period) && period >= 0 && period <= 3650) {
-            localStorage.setItem('defaultExpiryPeriod', period);
-            alert(t('default_expiry_set'));
-        } else {
-            alert(currentLang === 'ar' ? 'قيمة غير صالحة' : 'Invalid value');
-        }
-    }
+    if (val !== null) { const period = parseInt(val); if (!isNaN(period) && period >= 0 && period <= 3650) { localStorage.setItem('defaultExpiryPeriod', period); alert(t('default_expiry_set')); } else alert(currentLang === 'ar' ? 'قيمة غير صالحة' : 'Invalid value'); }
 }
 
 function showSearchHistorySettings() {
     const container = document.getElementById('settingsContent');
     if (!container) return;
-    const cats = [
-        { key: 'all', label: 'كل الأدوية' },
-        { key: 'pharmacy', label: 'أدوية الصيدلية' },
-        { key: 'companies', label: 'الشركات' },
-        { key: 'expiring', label: 'المنتهية قريباً' }
-    ];
-    let html = `
-        <div class="settings-page-header">
-            <button class="settings-back-btn" id="settingsBackBtn">←</button>
-            <div class="settings-page-title">${t('search_history')}</div>
-        </div>
-        <div id="searchHistoryContent"></div>
-    `;
+    const cats = [{ key: 'all', label: 'كل الأدوية' }, { key: 'pharmacy', label: 'أدوية الصيدلية' }, { key: 'companies', label: 'الشركات' }, { key: 'expiring', label: 'المنتهية قريباً' }];
+    let html = `<div class="settings-page-header"><button class="settings-back-btn" id="settingsBackBtn">←</button><div class="settings-page-title">${t('search_history')}</div></div><div id="searchHistoryContent"></div>`;
     container.innerHTML = html;
     const backBtn = document.getElementById('settingsBackBtn');
-    if (backBtn) {
-        backBtn.addEventListener('click', () => {
-            openSettingsModal();
-        });
-    }
+    if (backBtn) backBtn.addEventListener('click', () => { openSettingsModal(); });
     const contentDiv = document.getElementById('searchHistoryContent');
     if (!contentDiv) return;
     for (let cat of cats) {
         const searches = recentSearches[cat.key] || [];
-        contentDiv.innerHTML += `
-            <div class="history-category">
-                <div class="history-category-title">
-                    <span>${cat.label}</span>
-                    <button class="small-btn danger-btn" data-clear="${cat.key}">مسح الكل</button>
-                </div>
-                <div class="history-items">
-                    ${searches.map(s => `
-                        <div class="history-item">
-                            <span>${escapeHtml(s)}</span>
-                            <button class="delete-history" data-category="${cat.key}" data-term="${escapeHtml(s)}">✖</button>
-                        </div>
-                    `).join('')}
-                    ${searches.length === 0 ? '<span class="empty-state">لا توجد عمليات بحث سابقة</span>' : ''}
-                </div>
-            </div>
-        `;
+        contentDiv.innerHTML += `<div class="history-category"><div class="history-category-title"><span>${cat.label}</span><button class="small-btn danger-btn" data-clear="${cat.key}">مسح الكل</button></div><div class="history-items">${searches.map(s => `<div class="history-item"><span>${escapeHtml(s)}</span><button class="delete-history" data-category="${cat.key}" data-term="${escapeHtml(s)}">✖</button></div>`).join('')}${searches.length === 0 ? '<span class="empty-state">لا توجد عمليات بحث سابقة</span>' : ''}</div></div>`;
     }
-    contentDiv.querySelectorAll('[data-clear]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const key = btn.getAttribute('data-clear');
-            clearSearchHistory(key);
-            showSearchHistorySettings();
-        });
-    });
-    contentDiv.querySelectorAll('.delete-history').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const category = btn.getAttribute('data-category');
-            const term = btn.getAttribute('data-term');
-            recentSearches[category] = recentSearches[category].filter(s => s !== term);
-            localStorage.setItem(`recentSearches_${category}`, JSON.stringify(recentSearches[category]));
-            showSearchHistorySettings();
-            if (category === 'all' && currentPage === 'all') renderAllMedicines();
-            else if (category === 'pharmacy' && currentPage === 'pharmacy') renderPharmacyMedicines();
-            else if (category === 'companies' && currentPage === 'companies') renderCompaniesPage();
-            else if (category === 'expiring' && currentPage === 'expiring') renderExpiringSoonPage();
-        });
-    });
+    contentDiv.querySelectorAll('[data-clear]').forEach(btn => { btn.addEventListener('click', () => { const key = btn.getAttribute('data-clear'); clearSearchHistory(key); showSearchHistorySettings(); }); });
+    contentDiv.querySelectorAll('.delete-history').forEach(btn => { btn.addEventListener('click', () => { const category = btn.getAttribute('data-category'); const term = btn.getAttribute('data-term'); recentSearches[category] = recentSearches[category].filter(s => s !== term); localStorage.setItem(`recentSearches_${category}`, JSON.stringify(recentSearches[category])); showSearchHistorySettings(); if (category === 'all' && currentPage === 'all') renderAllMedicines(); else if (category === 'pharmacy' && currentPage === 'pharmacy') renderPharmacyMedicines(); else if (category === 'companies' && currentPage === 'companies') renderCompaniesPage(); else if (category === 'expiring' && currentPage === 'expiring') renderExpiringSoonPage(); }); });
 }
 
 function showBackupRestoreSettings() {
     const container = document.getElementById('settingsContent');
-    container.innerHTML = `
-        <div class="settings-page-header">
-            <button class="settings-back-btn" id="settingsBackBtn">←</button>
-            <div class="settings-page-title">${t('backup_restore')}</div>
-        </div>
-        <div class="import-export-grid">
-            <div class="import-export-item">
-                <span>${t('all_medicines')}</span>
-                <div class="import-export-buttons">
-                    <button id="exportGeneralBtn" class="small-btn">${t('export_db')}</button>
-                    <label class="small-btn">${t('import_db')}<input type="file" id="importGeneralInput" accept=".json" style="display:none;"></label>
-                </div>
-            </div>
-            <div class="import-export-item">
-                <span>${t('pharmacy_medicines')}</span>
-                <div class="import-export-buttons">
-                    <button id="exportPharmacyBtn" class="small-btn">${t('export_db')}</button>
-                    <label class="small-btn">${t('import_db')}<input type="file" id="importPharmacyInput" accept=".json" style="display:none;"></label>
-                </div>
-            </div>
-        </div>
-    `;
+    container.innerHTML = `<div class="settings-page-header"><button class="settings-back-btn" id="settingsBackBtn">←</button><div class="settings-page-title">${t('backup_restore')}</div></div><div class="import-export-grid"><div class="import-export-item"><span>${t('all_medicines')}</span><div class="import-export-buttons"><button id="exportGeneralBtn" class="small-btn">${t('export_db')}</button><label class="small-btn">${t('import_db')}<input type="file" id="importGeneralInput" accept=".json" style="display:none;"></label></div></div><div class="import-export-item"><span>${t('pharmacy_medicines')}</span><div class="import-export-buttons"><button id="exportPharmacyBtn" class="small-btn">${t('export_db')}</button><label class="small-btn">${t('import_db')}<input type="file" id="importPharmacyInput" accept=".json" style="display:none;"></label></div></div></div>`;
     const backBtn = document.getElementById('settingsBackBtn');
     if (backBtn) backBtn.addEventListener('click', () => openSettingsModal());
     document.getElementById('exportGeneralBtn')?.addEventListener('click', () => exportByType(MED_TYPES.GENERAL, 'general_medicines', true));
@@ -1960,16 +1690,7 @@ function showBackupRestoreSettings() {
 
 function showExportSettings() {
     const container = document.getElementById('settingsContent');
-    container.innerHTML = `
-        <div class="settings-page-header">
-            <button class="settings-back-btn" id="settingsBackBtn">←</button>
-            <div class="settings-page-title">${t('export_csv')} / PDF</div>
-        </div>
-        <div style="display:flex; gap:12px; justify-content:center;">
-            <button id="exportCsvBtn" class="save-btn">CSV</button>
-            <button id="exportPdfBtn" class="save-btn">PDF</button>
-        </div>
-    `;
+    container.innerHTML = `<div class="settings-page-header"><button class="settings-back-btn" id="settingsBackBtn">←</button><div class="settings-page-title">${t('export_csv')} / PDF</div></div><div style="display:flex; gap:12px; justify-content:center;"><button id="exportCsvBtn" class="save-btn">CSV</button><button id="exportPdfBtn" class="save-btn">PDF</button></div>`;
     const backBtn = document.getElementById('settingsBackBtn');
     if (backBtn) backBtn.addEventListener('click', () => openSettingsModal());
     document.getElementById('exportCsvBtn')?.addEventListener('click', exportCSV);
@@ -1978,13 +1699,7 @@ function showExportSettings() {
 
 function showAbout() {
     const container = document.getElementById('settingsContent');
-    container.innerHTML = `
-        <div class="settings-page-header">
-            <button class="settings-back-btn" id="settingsBackBtn">←</button>
-            <div class="settings-page-title">${t('about_app')}</div>
-        </div>
-        <p style="text-align:center; margin-top:20px;">${t('about_text')}</p>
-    `;
+    container.innerHTML = `<div class="settings-page-header"><button class="settings-back-btn" id="settingsBackBtn">←</button><div class="settings-page-title">${t('about_app')}</div></div><p style="text-align:center; margin-top:20px;">${t('about_text')}</p>`;
     const backBtn = document.getElementById('settingsBackBtn');
     if (backBtn) backBtn.addEventListener('click', () => openSettingsModal());
 }
@@ -1994,11 +1709,8 @@ async function exportByType(type, filename, useOrig = false) {
     try {
         const meds = await db.meds.where('type').equals(type).toArray();
         let exportData;
-        if (useOrig && type === MED_TYPES.GENERAL) {
-            exportData = meds.map(m => ({ scientific_name: m.scientificName || '', trade_name: m.name, manufacturer_name: m.company || '', manufacturer_nationality: m.origin || '', Dose: m.dosage || '', "Dosage form": m.dosageForm || '' }));
-        } else {
-            exportData = { meds, type };
-        }
+        if (useOrig && type === MED_TYPES.GENERAL) exportData = meds.map(m => ({ scientific_name: m.scientificName || '', trade_name: m.name, manufacturer_name: m.company || '', manufacturer_nationality: m.origin || '', Dose: m.dosage || '', "Dosage form": m.dosageForm || '' }));
+        else exportData = { meds, type };
         const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
         saveAs(blob, `${filename}_${new Date().toISOString().slice(0, 10)}.json`);
     } finally { hideLoading(); }
@@ -2012,28 +1724,11 @@ async function importGeneral(file) {
         let data = safeParseJSON(text);
         let meds = [];
         if (data.meds && Array.isArray(data.meds)) meds = data.meds;
-        else if (Array.isArray(data)) {
-            for (let item of data) {
-                const trade = (item.trade_name || '').trim();
-                if (!trade) continue;
-                meds.push({ name: trade, scientificName: (item.scientific_name || '').trim(), company: (item.manufacturer_name || '').trim(), origin: (item.manufacturer_nationality || '').trim(), dosageForm: (item['Dosage form'] || '').trim(), dosage: (item.Dose || '').trim(), category: (item.category || '').trim(), type: MED_TYPES.GENERAL, expiry: '9999-12-31', createdAt: new Date().toISOString(), barcode: '', image: null });
-            }
-        } else throw new Error('تنسيق غير صحيح');
-        
+        else if (Array.isArray(data)) { for (let item of data) { const trade = (item.trade_name || '').trim(); if (!trade) continue; meds.push({ name: trade, scientificName: (item.scientific_name || '').trim(), company: (item.manufacturer_name || '').trim(), origin: (item.manufacturer_nationality || '').trim(), dosageForm: (item['Dosage form'] || '').trim(), dosage: (item.Dose || '').trim(), category: (item.category || '').trim(), type: MED_TYPES.GENERAL, expiry: '9999-12-31', createdAt: new Date().toISOString(), barcode: '', image: null }); } }
+        else throw new Error('تنسيق غير صحيح');
         meds = meds.filter(m => !m.type || m.type === MED_TYPES.GENERAL).map(m => ({ ...m, type: MED_TYPES.GENERAL }));
-        
-        let added = 0;
-        let duplicates = 0;
-        for (const med of meds) {
-            const duplicate = await isDuplicateMedicine(med);
-            if (duplicate) {
-                duplicates++;
-                continue;
-            }
-            await db.meds.add(med);
-            added++;
-        }
-        
+        let added = 0, duplicates = 0;
+        for (const med of meds) { const duplicate = await isDuplicateMedicine(med); if (duplicate) duplicates++; else { await db.meds.add(med); added++; } }
         alert(`تم الاستيراد بنجاح\nتمت إضافة: ${added} دواء\nتم تخطي المكرر: ${duplicates} دواء`);
         if (currentPage === 'all') renderAllMedicines();
         else if (currentPage === 'pharmacy') renderPharmacyMedicines();
@@ -2053,21 +1748,9 @@ async function importPharmacy(file) {
         if (data.meds && Array.isArray(data.meds)) meds = data.meds;
         else if (Array.isArray(data)) meds = data;
         else throw new Error('تنسيق غير صحيح');
-        
         meds = meds.filter(m => !m.type || m.type === MED_TYPES.PHARMACY).map(m => ({ ...m, type: MED_TYPES.PHARMACY }));
-        
-        let added = 0;
-        let duplicates = 0;
-        for (const med of meds) {
-            const duplicate = await isDuplicateMedicine(med);
-            if (duplicate) {
-                duplicates++;
-                continue;
-            }
-            await db.meds.add(med);
-            added++;
-        }
-        
+        let added = 0, duplicates = 0;
+        for (const med of meds) { const duplicate = await isDuplicateMedicine(med); if (duplicate) duplicates++; else { await db.meds.add(med); added++; } }
         alert(`تم الاستيراد بنجاح\nتمت إضافة: ${added} دواء\nتم تخطي المكرر: ${duplicates} دواء`);
         if (currentPage === 'all') renderAllMedicines();
         else if (currentPage === 'pharmacy') renderPharmacyMedicines();
@@ -2082,9 +1765,7 @@ function safeParseJSON(content) {
         const items = [];
         const regex = /\{[^{}]*\}/g;
         let match;
-        while ((match = regex.exec(content)) !== null) {
-            try { items.push(JSON.parse(match[0])); } catch (inner) { }
-        }
+        while ((match = regex.exec(content)) !== null) { try { items.push(JSON.parse(match[0])); } catch (inner) { } }
         if (items.length) return items;
         throw e;
     }
@@ -2135,7 +1816,7 @@ async function checkAndSendExpiryNotifications() {
     if (Notification.permission === 'granted') toSend.forEach(med => { const d = getDaysRemaining(med.expiry); new Notification(`⚠️ ${med.name}`, { body: currentLang === 'ar' ? `ينتهي خلال ${d} أيام` : `Expires in ${d} days` }); });
     for (const med of toSend) {
         const d = getDaysRemaining(med.expiry);
-        await db.notifications.add({ message: `${med.name} ${currentLang === 'ar' ? 'ينتهي خلال' : 'expires in'} ${d} ${currentLang === 'ar' ? 'أيام' : 'days'}`, date: new Date(), read: false });
+        await db.notifications.add({ message: `${med.name} ${currentLang === 'ar' ? 'ينتهي خلال' : 'expires in'} ${d} ${currentLang === 'ar' ? 'أيام' : 'days'}`, date: new Date(), read: false, medId: med.id });
         const existing = await db.notificationLog.where('medId').equals(med.id).first();
         if (existing) {
             const last = new Date(existing.lastNotified);
@@ -2157,77 +1838,33 @@ async function showMedDetails(med) {
     currentMed = med;
     const detailDiv = document.getElementById('medDetail');
     let expiryHtml = '';
-    if (med.type !== MED_TYPES.GENERAL) {
-        expiryHtml = `<div class="med-detail-item"><div class="med-detail-label">${t('expiry_date')}</div><div class="med-detail-value">${med.expiry}</div></div>`;
-    }
-    detailDiv.innerHTML = `
-        <div class="med-detail-item"><div class="med-detail-label">${t('name')}</div><div class="med-detail-value">${escapeHtml(med.name)}</div></div>
-        <div class="med-detail-item"><div class="med-detail-label">${t('scientific_name')}</div><div class="med-detail-value">${med.scientificName || '-'}</div></div>
-        <div class="med-detail-item"><div class="med-detail-label">${t('company')}</div><div class="med-detail-value">${med.company || '-'}</div></div>
-        <div class="med-detail-item"><div class="med-detail-label">${t('origin')}</div><div class="med-detail-value">${med.origin || '-'}</div></div>
-        <div class="med-detail-item"><div class="med-detail-label">${t('category')}</div><div class="med-detail-value">${med.category || '-'}</div></div>
-        <div class="med-detail-item"><div class="med-detail-label">${t('dosage_form')}</div><div class="med-detail-value">${med.dosageForm || '-'}</div></div>
-        <div class="med-detail-item"><div class="med-detail-label">${t('dosage')}</div><div class="med-detail-value">${med.dosage || '-'}</div></div>
-        ${expiryHtml}
-        <div class="med-detail-item"><div class="med-detail-label">${t('barcode_label')}</div><div class="med-detail-value">${med.barcode || '-'}</div></div>
-        ${med.image ? `<div class="med-image"><img src="${med.image}" style="max-width:100%; border-radius:12px;"></div>` : ''}
-    `;
+    if (med.type !== MED_TYPES.GENERAL) expiryHtml = `<div class="med-detail-item"><div class="med-detail-label">${t('expiry_date')}</div><div class="med-detail-value">${med.expiry}</div></div>`;
+    detailDiv.innerHTML = `<div class="med-detail-item"><div class="med-detail-label">${t('name')}</div><div class="med-detail-value">${escapeHtml(med.name)}</div></div><div class="med-detail-item"><div class="med-detail-label">${t('scientific_name')}</div><div class="med-detail-value">${med.scientificName || '-'}</div></div><div class="med-detail-item"><div class="med-detail-label">${t('company')}</div><div class="med-detail-value">${med.company || '-'}</div></div><div class="med-detail-item"><div class="med-detail-label">${t('origin')}</div><div class="med-detail-value">${med.origin || '-'}</div></div><div class="med-detail-item"><div class="med-detail-label">${t('category')}</div><div class="med-detail-value">${med.category || '-'}</div></div><div class="med-detail-item"><div class="med-detail-label">${t('dosage_form')}</div><div class="med-detail-value">${med.dosageForm || '-'}</div></div><div class="med-detail-item"><div class="med-detail-label">${t('dosage')}</div><div class="med-detail-value">${med.dosage || '-'}</div></div>${expiryHtml}<div class="med-detail-item"><div class="med-detail-label">${t('barcode_label')}</div><div class="med-detail-value">${med.barcode || '-'}</div></div>${med.image ? `<div class="med-image"><img src="${med.image}" style="max-width:100%; border-radius:12px;"></div>` : ''}`;
     const addBtn = document.getElementById('addToPharmacyBtn');
     if (addBtn) addBtn.style.display = (currentPage === 'pharmacy' || currentPage === 'companies') ? 'none' : 'inline-flex';
-    
     const editBtn = document.getElementById('editMedBtn');
     const deleteBtn = document.getElementById('deleteMedBtn');
     const addPharmacyBtn = document.getElementById('addToPharmacyBtn');
     const cancelBtn = document.getElementById('cancelMedBtn');
-    
-    if (editBtn) {
-        const newEditBtn = editBtn.cloneNode(true);
-        editBtn.parentNode.replaceChild(newEditBtn, editBtn);
-        newEditBtn.onclick = () => { closeModal('medModal'); showEditFormModal(med); };
-    }
-    if (deleteBtn) {
-        const newDeleteBtn = deleteBtn.cloneNode(true);
-        deleteBtn.parentNode.replaceChild(newDeleteBtn, deleteBtn);
-        newDeleteBtn.onclick = () => {
-            if (confirm(t('delete_confirm'))) {
-                moveToDeleted(med.id);
-                closeModal('medModal');
-            }
-        };
-    }
-    if (addPharmacyBtn) {
-        const newAddBtn = addPharmacyBtn.cloneNode(true);
-        addPharmacyBtn.parentNode.replaceChild(newAddBtn, addPharmacyBtn);
-        newAddBtn.onclick = async () => { await addToPharmacy(med); closeModal('medModal'); };
-    }
-    if (cancelBtn) {
-        const newCancelBtn = cancelBtn.cloneNode(true);
-        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
-        newCancelBtn.onclick = () => closeModal('medModal');
-    }
-    
+    if (editBtn) { const newEditBtn = editBtn.cloneNode(true); editBtn.parentNode.replaceChild(newEditBtn, editBtn); newEditBtn.onclick = () => { closeModal('medModal'); showEditFormModal(med); }; }
+    if (deleteBtn) { const newDeleteBtn = deleteBtn.cloneNode(true); deleteBtn.parentNode.replaceChild(newDeleteBtn, deleteBtn); newDeleteBtn.onclick = () => { if (confirm(t('delete_confirm'))) { moveToDeleted(med.id, currentPage); closeModal('medModal'); } }; }
+    if (addPharmacyBtn) { const newAddBtn = addPharmacyBtn.cloneNode(true); addPharmacyBtn.parentNode.replaceChild(newAddBtn, addPharmacyBtn); newAddBtn.onclick = async () => { await addToPharmacy(med); closeModal('medModal'); }; }
+    if (cancelBtn) { const newCancelBtn = cancelBtn.cloneNode(true); cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn); newCancelBtn.onclick = () => closeModal('medModal'); }
     openModal('medModal');
 }
 
 async function addToPharmacy(originalMed) {
     const newExpiry = prompt(t('add_expiry'), new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0]);
     if (!newExpiry) return;
-    
+    if (newExpiry === '9999-12-31') { alert('الرجاء إدخال تاريخ انتهاء صحيح'); return; }
     const newMed = {
         name: originalMed.name, expiry: newExpiry, scientificName: originalMed.scientificName || '', company: originalMed.company || '',
         origin: originalMed.origin || '', type: MED_TYPES.PHARMACY, category: originalMed.category || '',
         barcode: originalMed.barcode || '', image: originalMed.image || null, dosageForm: originalMed.dosageForm || '',
         dosage: originalMed.dosage || '', createdAt: new Date().toISOString()
     };
-    
     const duplicate = await isDuplicateMedicine(newMed);
-    if (duplicate) {
-        alert(currentLang === 'ar' 
-            ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل في الصيدلية: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})`
-            : `Cannot add. Duplicate medicine exists in pharmacy: ${duplicate.name} (Expiry: ${duplicate.expiry})`);
-        return;
-    }
-    
+    if (duplicate) { alert(currentLang === 'ar' ? `لا يمكن الإضافة. يوجد دواء مطابق بالفعل في الصيدلية: ${duplicate.name} (تاريخ انتهاء: ${duplicate.expiry})` : `Cannot add. Duplicate medicine exists in pharmacy: ${duplicate.name} (Expiry: ${duplicate.expiry})`); return; }
     await db.meds.add(newMed);
     await addMedicineToGeneralIfNotExists(newMed);
     const toast = document.createElement('div'); toast.className = 'offline-toast'; toast.innerText = t('added_to_pharmacy'); document.body.appendChild(toast); setTimeout(() => toast.remove(), 2000);
@@ -2235,84 +1872,22 @@ async function addToPharmacy(originalMed) {
 }
 
 function showFirstTimeGuidance() {
-    if (!localStorage.getItem('firstVisit')) {
-        setTimeout(() => {
-            const toast = document.createElement('div'); toast.className = 'offline-toast'; toast.style.backgroundColor = 'var(--primary)';
-            toast.innerText = t('long_press_guide'); document.body.appendChild(toast); setTimeout(() => toast.remove(), 5000);
-            localStorage.setItem('firstVisit', 'true');
-        }, 1000);
-    }
+    if (!localStorage.getItem('firstVisit')) { setTimeout(() => { const toast = document.createElement('div'); toast.className = 'offline-toast'; toast.style.backgroundColor = 'var(--primary)'; toast.innerText = t('long_press_guide'); document.body.appendChild(toast); setTimeout(() => toast.remove(), 5000); localStorage.setItem('firstVisit', 'true'); }, 1000); }
 }
 
-function changeLanguage(lang) {
-    currentLang = lang;
-    localStorage.setItem('appLang', lang);
-    updateAllText();
-    if (currentPage === 'home') updateBarChart();
-}
-
-function toggleDarkMode() {
-    document.body.classList.toggle('dark');
-    localStorage.setItem('darkMode', document.body.classList.contains('dark'));
-    if (currentPage === 'home') updateBarChart();
-    const savedColor = localStorage.getItem('appColor');
-    if (savedColor) {
-        try {
-            const color = JSON.parse(savedColor);
-            applyAppColor(color);
-        } catch(e) { console.error(e); }
-    }
-}
-
-function clearSearchHistory(pageKey) {
-    recentSearches[pageKey] = [];
-    localStorage.setItem(`recentSearches_${pageKey}`, '[]');
-    if (pageKey === 'all' && currentPage === 'all') renderAllMedicines();
-    else if (pageKey === 'pharmacy' && currentPage === 'pharmacy') renderPharmacyMedicines();
-    else if (pageKey === 'companies' && currentPage === 'companies') renderCompaniesPage();
-    else if (pageKey === 'expiring' && currentPage === 'expiring') renderExpiringSoonPage();
-}
-
-function setupModalBackdropClose() {
-    document.querySelectorAll('.modal').forEach(modal => {
-        modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
-    });
-}
-
+function changeLanguage(lang) { currentLang = lang; localStorage.setItem('appLang', lang); updateAllText(); if (currentPage === 'home') updateBarChart(); }
+function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('darkMode', document.body.classList.contains('dark')); if (currentPage === 'home') updateBarChart(); const savedColor = localStorage.getItem('appColor'); if (savedColor) { try { const color = JSON.parse(savedColor); applyAppColor(color); } catch(e) { console.error(e); } } }
+function clearSearchHistory(pageKey) { recentSearches[pageKey] = []; localStorage.setItem(`recentSearches_${pageKey}`, '[]'); if (pageKey === 'all' && currentPage === 'all') renderAllMedicines(); else if (pageKey === 'pharmacy' && currentPage === 'pharmacy') renderPharmacyMedicines(); else if (pageKey === 'companies' && currentPage === 'companies') renderCompaniesPage(); else if (pageKey === 'expiring' && currentPage === 'expiring') renderExpiringSoonPage(); }
+function setupModalBackdropClose() { document.querySelectorAll('.modal').forEach(modal => { modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; }); }); }
 window.handleBackButton = function () {
-    if (currentPage === 'home') {
-        showExitConfirmation();
-        return;
-    }
-    
-    if (isInEditMode && currentMed) {
-        showSaveChangesModal(
-            async () => { await saveMedFromForm(); isInEditMode = false; currentMed = null; switchPage('home'); },
-            () => { isInEditMode = false; currentMed = null; closeMedFormModal(); switchPage('home'); }
-        );
-        return;
-    }
-    
-    if (currentCompany !== null) {
-        currentCompany = null;
-        renderCompaniesPage();
-        return;
-    }
-    
-    if (searchQuery !== '' && searchQuery.trim() !== '') {
-        if (clearSearch()) {
-            return;
-        }
-    }
-    
-    if (pageHistoryStack.length > 0) {
-        const prev = pageHistoryStack.pop();
-        switchPage(prev);
-    } else {
-        switchPage('home');
-    }
+    if (currentPage === 'home') { showExitConfirmation(); return; }
+    if (isInEditMode && currentMed) { showSaveChangesModal(async () => { await saveMedFromForm(); isInEditMode = false; currentMed = null; switchPage('home'); }, () => { isInEditMode = false; currentMed = null; closeMedFormModal(); switchPage('home'); }); return; }
+    if (currentCompany !== null) { currentCompany = null; renderCompaniesPage(); return; }
+    if (searchQuery !== '' && searchQuery.trim() !== '') { if (clearSearch()) return; }
+    if (pageHistoryStack.length > 0) { const prev = pageHistoryStack.pop(); switchPage(prev); } else { switchPage('home'); }
 };
-
+function closeSortModal() { closeModal('customSortModal'); }
+document.getElementById('closeSortModal')?.addEventListener('click', closeSortModal);
 window.goHome = goHome;
 window.switchPage = switchPage;
 window.openSettingsModal = openSettingsModal;
@@ -2327,7 +1902,7 @@ window.startBarcodeScanner = startBarcodeScanner;
 window.startScannerForSearch = startScannerForSearch;
 window.stopScannerAndClose = stopScannerAndClose;
 window.showMedDetails = showMedDetails;
-window.deleteCurrentMed = () => { if (currentMed && confirm(t('delete_confirm'))) moveToDeleted(currentMed.id); };
+window.deleteCurrentMed = () => { if (currentMed && confirm(t('delete_confirm'))) moveToDeleted(currentMed.id, currentPage); };
 window.renderAllMedicines = renderAllMedicines;
 window.renderPharmacyMedicines = renderPharmacyMedicines;
 window.renderHome = renderHome;
@@ -2351,18 +1926,14 @@ window.toggleSelectCompany = toggleSelectCompany;
 window.toggleSelectCategory = toggleSelectCategory;
 window.batchRenameCompanies = batchRenameCompanies;
 window.batchRenameCategories = batchRenameCategories;
-
 setTimeout(() => { hideLoading(); }, 4000);
 window.addEventListener('error', () => hideLoading());
 window.addEventListener('unhandledrejection', () => hideLoading());
-
 const confirmExitBtn = document.getElementById('confirmExitBtn');
 const cancelExitBtn = document.getElementById('cancelExitBtn');
 if (confirmExitBtn) confirmExitBtn.addEventListener('click', () => { hideExitConfirmation(); if (window.close) window.close(); else alert('لا يمكن إغلاق المتصفح برمجياً'); });
 if (cancelExitBtn) cancelExitBtn.addEventListener('click', hideExitConfirmation);
-
 window.addEventListener('popstate', (event) => { event.preventDefault(); window.handleBackButton(); });
-
 document.addEventListener('DOMContentLoaded', async () => {
     await initDemoData();
     if (localStorage.getItem('darkMode') === 'true') document.body.classList.add('dark');
@@ -2371,39 +1942,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.body.dir = 'rtl';
     updateAllText();
     if (Notification.permission !== 'granted' && Notification.permission !== 'denied') Notification.requestPermission();
-
     const notifBtn = document.getElementById('notifBtn');
     const settingsBtn = document.getElementById('settingsHeaderBtn');
-    const smartBackBtn = document.getElementById('smartBackBtn');
+    const headerBackBtn = document.getElementById('headerBackBtn');
     const appTitle = document.getElementById('appTitle');
-    if (notifBtn) notifBtn.onclick = () => switchPage('inbox');
-    if (settingsBtn) settingsBtn.onclick = () => openSettingsModal();
-    if (smartBackBtn) smartBackBtn.onclick = () => window.handleBackButton();
-    if (appTitle) appTitle.onclick = () => window.goHome();
-
+    const homeBarcodeBtn = document.getElementById('homeBarcodeBtn');
+    const barcodeSearchBtn = document.getElementById('barcodeSearchBtn');
+    const scanBarcodeBtn = document.getElementById('scanBarcodeBtn');
+    const scanBarcodeGenBtn = document.getElementById('scanBarcodeGenBtn');
+    function addClickAndTouch(element, handler) { if (!element) return; element.addEventListener('click', handler); element.addEventListener('touchstart', (e) => { e.preventDefault(); handler(); }); }
+    addClickAndTouch(notifBtn, () => switchPage('inbox'));
+    addClickAndTouch(settingsBtn, () => openSettingsModal());
+    addClickAndTouch(headerBackBtn, () => window.handleBackButton());
+    addClickAndTouch(appTitle, () => window.goHome());
+    addClickAndTouch(homeBarcodeBtn, () => window.startScannerForSearch());
+    addClickAndTouch(barcodeSearchBtn, () => window.startScannerForSearch());
+    addClickAndTouch(scanBarcodeBtn, () => startBarcodeScanner('medBarcode'));
+    addClickAndTouch(scanBarcodeGenBtn, () => startBarcodeScanner('genBarcode'));
     const submitMed = document.getElementById('submitMedBtn');
     if (submitMed) submitMed.onclick = saveMedFromForm;
     const medImage = document.getElementById('medImage');
-    if (medImage) medImage.onchange = function (e) {
-        const file = e.target.files[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (ev) => { document.getElementById('imagePreview').innerHTML = `<img src="${ev.target.result}" style="max-width:100%; max-height:100%;">`; };
-            reader.readAsDataURL(file);
-        }
-    };
+    if (medImage) medImage.onchange = function (e) { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (ev) => { document.getElementById('imagePreview').innerHTML = `<img src="${ev.target.result}" style="max-width:100%; max-height:100%;">`; }; reader.readAsDataURL(file); } };
     const submitGeneral = document.getElementById('submitGeneralBtn');
     if (submitGeneral) submitGeneral.onclick = saveGeneralMedFromForm;
     const genImage = document.getElementById('genImage');
-    if (genImage) genImage.onchange = function (e) {
-        const file = e.target.files[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (ev) => { document.getElementById('genImagePreview').innerHTML = `<img src="${ev.target.result}" style="max-width:100%; max-height:100%;">`; };
-            reader.readAsDataURL(file);
-        }
-    };
-
+    if (genImage) genImage.onchange = function (e) { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (ev) => { document.getElementById('genImagePreview').innerHTML = `<img src="${ev.target.result}" style="max-width:100%; max-height:100%;">`; }; reader.readAsDataURL(file); } };
     document.getElementById('closeMedModal')?.addEventListener('click', () => closeModal('medModal'));
     document.getElementById('closeMedFormModal')?.addEventListener('click', closeMedFormModal);
     document.getElementById('closeGeneralFormModal')?.addEventListener('click', closeGeneralFormModal);
@@ -2417,12 +1980,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('closeColorModal')?.addEventListener('click', () => closeModal('colorModal'));
     document.getElementById('closeExitModal')?.addEventListener('click', () => closeModal('exitConfirmModal'));
     document.getElementById('closeSaveChangesModal')?.addEventListener('click', () => closeModal('saveChangesModal'));
-
     setupModalBackdropClose();
-
     updateCategoriesDatalist('medCategoriesList');
     updateCategoriesDatalist('genCategoriesList');
-
+    detectIOSDevice();
+    testDeviceCompatibility();
+    initCustomDatePickers();
     history.pushState({ page: currentPage }, '');
     switchPage('home');
     checkAndSendExpiryNotifications();
